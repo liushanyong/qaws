@@ -50,6 +50,7 @@ struct qaws_traversal
 	unsigned int table_size;
 	qaws_scalar* table_params;
 	qaws_scalar* table_distances;
+	qaws_scalar current_distance;
 };
 
 /* Family-specific impl structs */

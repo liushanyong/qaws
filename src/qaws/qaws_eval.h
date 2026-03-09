@@ -4,6 +4,8 @@
 #include "qaws_types.h"
 #include "qaws_status.h"
 
+/* All evaluation functions are thread-safe on immutable curves. */
+
 qaws_status qaws_curve_evaluate_2d(
 	qaws_curve const* curve,
 	qaws_scalar parameter,

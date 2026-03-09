@@ -4,6 +4,8 @@
 #include "qaws_types.h"
 #include "qaws_status.h"
 
+/* All sampling functions are thread-safe on immutable curves. */
+
 qaws_status qaws_curve_get_sample_count(
 	qaws_curve const* curve,
 	qaws_sampling_desc const* desc,

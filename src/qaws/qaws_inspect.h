@@ -4,6 +4,8 @@
 #include "qaws_types.h"
 #include "qaws_status.h"
 
+/* All inspection functions are thread-safe on immutable curves. */
+
 /* Generic inspection */
 qaws_curve_kind qaws_curve_get_kind(qaws_curve const* curve);
 qaws_dimension  qaws_curve_get_dimension(qaws_curve const* curve);
@@ -46,6 +48,50 @@ qaws_status qaws_curve_get_span_continuity(
 	qaws_curve const* curve,
 	unsigned int boundary_index,
 	qaws_continuity* out_continuity);
+
+/* Derived geometric helpers */
+qaws_status qaws_curve_compute_tangent_2d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_vec2* out_tangent);
+
+qaws_status qaws_curve_compute_tangent_3d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_vec3* out_tangent);
+
+qaws_status qaws_curve_compute_curvature_2d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_scalar* out_curvature);
+
+qaws_status qaws_curve_compute_curvature_3d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_scalar* out_curvature);
+
+qaws_status qaws_curve_compute_torsion_3d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_scalar* out_torsion);
+
+qaws_status qaws_curve_compute_speed(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_scalar* out_speed);
+
+/* Frenet frame */
+qaws_status qaws_curve_compute_normal_2d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_vec2* out_normal);
+
+qaws_status qaws_curve_compute_frenet_frame_3d(
+	qaws_curve const* curve,
+	qaws_scalar parameter,
+	qaws_vec3* out_tangent,
+	qaws_vec3* out_normal,
+	qaws_vec3* out_binormal);
 
 /* Family-specific inspection */
 qaws_status qaws_bezier_get_control_points(

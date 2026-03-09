@@ -1,6 +1,22 @@
 #ifndef QAWS_TYPES_H
 #define QAWS_TYPES_H
 
+/*
+ * Thread safety guarantees:
+ *
+ * - qaws_curve objects are immutable after creation. Multiple threads
+ *   may concurrently evaluate, sample, inspect, or traverse the same
+ *   curve without synchronization.
+ *
+ * - qaws_traversal objects are safe for concurrent reads (evaluate,
+ *   map queries) but qaws_traversal_advance_* and qaws_traversal_reset
+ *   mutate internal state and require external synchronization.
+ *
+ * - Creation and destruction functions (create_*, destroy) are not
+ *   thread-safe on the same object. Do not destroy a curve while
+ *   another thread is using it.
+ */
+
 #ifndef QAWS_SCALAR_IS_FLOAT
 #define QAWS_SCALAR_IS_FLOAT 1
 #endif
@@ -74,6 +90,27 @@ typedef enum qaws_motion_profile
 	QAWS_MOTION_PROFILE_TRAPEZOIDAL_SPEED
 } qaws_motion_profile;
 
+typedef enum qaws_easing
+{
+	QAWS_EASING_LINEAR = 0,
+	QAWS_EASING_QUAD_IN,
+	QAWS_EASING_QUAD_OUT,
+	QAWS_EASING_QUAD_IN_OUT,
+	QAWS_EASING_CUBIC_IN,
+	QAWS_EASING_CUBIC_OUT,
+	QAWS_EASING_CUBIC_IN_OUT,
+	QAWS_EASING_SINE_IN,
+	QAWS_EASING_SINE_OUT,
+	QAWS_EASING_SINE_IN_OUT
+} qaws_easing;
+
+typedef enum qaws_wrap_mode
+{
+	QAWS_WRAP_CLAMP = 0,
+	QAWS_WRAP_LOOP,
+	QAWS_WRAP_PING_PONG
+} qaws_wrap_mode;
+
 typedef enum qaws_eval_flags
 {
 	QAWS_EVAL_FLAG_NONE     = 0,
@@ -125,6 +162,8 @@ typedef struct qaws_traversal_desc
 	qaws_scalar start_time;
 	qaws_scalar end_time;
 	int clamp_to_domain;
+	qaws_easing easing;
+	qaws_wrap_mode wrap_mode;
 } qaws_traversal_desc;
 
 typedef struct qaws_curve qaws_curve;

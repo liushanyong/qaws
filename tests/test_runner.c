@@ -1756,6 +1756,907 @@ static void test_svg_all_families(void)
 }
 
 /* ================================================================== */
+/* Frenet frame tests                                                  */
+/* ================================================================== */
+
+static void test_frenet_frame(void)
+{
+	printf("test_frenet_frame\n");
+
+	/* 2D normal: perpendicular to tangent */
+	{
+		qaws_vec2 pts[] = { {0, 0}, {2, 0} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_vec2 normal;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_2D;
+		bdesc.degree = 1;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 2;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		/* Horizontal line: tangent is (1,0), normal should be (0,1) */
+		status = qaws_curve_compute_normal_2d(curve, (qaws_scalar)0.5, &normal);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(approx_eq(normal.x, (qaws_scalar)0.0), "2D normal x=0 for horizontal");
+		TEST_ASSERT(approx_eq(normal.y, (qaws_scalar)1.0), "2D normal y=1 for horizontal");
+
+		qaws_curve_destroy(curve);
+	}
+
+	/* 2D normal for vertical line */
+	{
+		qaws_vec2 pts[] = { {0, 0}, {0, 2} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_vec2 normal;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_2D;
+		bdesc.degree = 1;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 2;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		/* Vertical line going up: tangent (0,1), normal (-1,0) */
+		status = qaws_curve_compute_normal_2d(curve, (qaws_scalar)0.5, &normal);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(approx_eq(normal.x, (qaws_scalar)-1.0), "2D normal x=-1 for vertical");
+		TEST_ASSERT(approx_eq(normal.y, (qaws_scalar)0.0), "2D normal y=0 for vertical");
+
+		qaws_curve_destroy(curve);
+	}
+
+	/* 3D Frenet frame: planar curve in XY */
+	{
+		qaws_vec3 pts[] = { {0,0,0}, {1,2,0}, {2,0,0} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_vec3 T, N, B;
+		qaws_scalar dot_TN, dot_TB, dot_NB;
+		qaws_scalar T_len, N_len, B_len;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_3D;
+		bdesc.degree = 2;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 3;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_compute_frenet_frame_3d(
+			curve, (qaws_scalar)0.5, &T, &N, &B);
+		TEST_ASSERT_STATUS(status);
+
+		/* T, N, B should be orthonormal */
+		T_len = (qaws_scalar)sqrt((double)(T.x*T.x + T.y*T.y + T.z*T.z));
+		N_len = (qaws_scalar)sqrt((double)(N.x*N.x + N.y*N.y + N.z*N.z));
+		B_len = (qaws_scalar)sqrt((double)(B.x*B.x + B.y*B.y + B.z*B.z));
+		TEST_ASSERT(approx_eq(T_len, (qaws_scalar)1.0), "T is unit length");
+		TEST_ASSERT(approx_eq(N_len, (qaws_scalar)1.0), "N is unit length");
+		TEST_ASSERT(approx_eq(B_len, (qaws_scalar)1.0), "B is unit length");
+
+		dot_TN = T.x*N.x + T.y*N.y + T.z*N.z;
+		dot_TB = T.x*B.x + T.y*B.y + T.z*B.z;
+		dot_NB = N.x*B.x + N.y*B.y + N.z*B.z;
+		TEST_ASSERT(approx_eq(dot_TN, (qaws_scalar)0.0), "T perpendicular to N");
+		TEST_ASSERT(approx_eq(dot_TB, (qaws_scalar)0.0), "T perpendicular to B");
+		TEST_ASSERT(approx_eq(dot_NB, (qaws_scalar)0.0), "N perpendicular to B");
+
+		/* For planar XY curve, binormal should point along Z */
+		TEST_ASSERT(B.z != (qaws_scalar)0.0, "B has Z component for XY curve");
+
+		qaws_curve_destroy(curve);
+	}
+
+	/* 3D Frenet frame: straight line (degenerate) */
+	{
+		qaws_vec3 pts[] = { {0,0,0}, {1,0,0} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_vec3 T, N, B;
+		qaws_scalar dot_TN;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_3D;
+		bdesc.degree = 1;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 2;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		/* Straight line: D1xD2=0, should still produce valid frame */
+		status = qaws_curve_compute_frenet_frame_3d(
+			curve, (qaws_scalar)0.5, &T, &N, &B);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(approx_eq(T.x, (qaws_scalar)1.0), "straight line T along X");
+
+		dot_TN = T.x*N.x + T.y*N.y + T.z*N.z;
+		TEST_ASSERT(approx_eq(dot_TN, (qaws_scalar)0.0), "T perp N for straight line");
+
+		qaws_curve_destroy(curve);
+	}
+
+	/* Dimension mismatch */
+	{
+		qaws_vec2 pts[] = { {0,0}, {1,1} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_vec3 T, N, B;
+		qaws_vec2 normal2d;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_2D;
+		bdesc.degree = 1;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 2;
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_compute_frenet_frame_3d(
+			curve, (qaws_scalar)0.5, &T, &N, &B);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_DIMENSION, "3D frame rejects 2D curve");
+
+		status = qaws_curve_compute_normal_2d(NULL, (qaws_scalar)0.5, &normal2d);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "null curve");
+
+		qaws_curve_destroy(curve);
+	}
+}
+
+/* ================================================================== */
+/* Curve reverse tests                                                 */
+/* ================================================================== */
+
+static void test_curve_reverse(void)
+{
+	printf("test_curve_reverse\n");
+
+	/* Bezier reverse: endpoints swap */
+	{
+		qaws_vec2 pts[] = { {0, 0}, {1, 2}, {3, 1} };
+		qaws_bezier_desc bdesc;
+		qaws_curve *curve = NULL;
+		qaws_curve *rev = NULL;
+		qaws_eval_result_2d r_orig, r_rev;
+		qaws_status status;
+
+		bdesc.dimension = QAWS_DIMENSION_2D;
+		bdesc.degree = 2;
+		bdesc.control_points = pts;
+		bdesc.control_point_count = 3;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_reverse(curve, &rev);
+		TEST_ASSERT_STATUS(status);
+
+		/* Original start == reversed end */
+		qaws_curve_evaluate_2d(curve, (qaws_scalar)0.0,
+			QAWS_EVAL_FLAG_POSITION, &r_orig);
+		qaws_curve_evaluate_2d(rev, (qaws_scalar)1.0,
+			QAWS_EVAL_FLAG_POSITION, &r_rev);
+		TEST_ASSERT(approx_eq(r_orig.position.x, r_rev.position.x), "reverse: start==end x");
+		TEST_ASSERT(approx_eq(r_orig.position.y, r_rev.position.y), "reverse: start==end y");
+
+		/* Original end == reversed start */
+		qaws_curve_evaluate_2d(curve, (qaws_scalar)1.0,
+			QAWS_EVAL_FLAG_POSITION, &r_orig);
+		qaws_curve_evaluate_2d(rev, (qaws_scalar)0.0,
+			QAWS_EVAL_FLAG_POSITION, &r_rev);
+		TEST_ASSERT(approx_eq(r_orig.position.x, r_rev.position.x), "reverse: end==start x");
+		TEST_ASSERT(approx_eq(r_orig.position.y, r_rev.position.y), "reverse: end==start y");
+
+		qaws_curve_destroy(rev);
+		qaws_curve_destroy(curve);
+	}
+
+	/* Catmull-Rom reverse */
+	{
+		qaws_vec2 pts[] = { {0,0}, {1,2}, {3,1}, {4,3} };
+		qaws_catmull_rom_desc cdesc;
+		qaws_curve *curve = NULL;
+		qaws_curve *rev = NULL;
+		qaws_eval_result_2d r_orig, r_rev;
+		qaws_status status;
+		qaws_range range;
+
+		cdesc.dimension = QAWS_DIMENSION_2D;
+		cdesc.control_points = pts;
+		cdesc.control_point_count = 4;
+		cdesc.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+		cdesc.closed = 0;
+
+		status = qaws_curve_create_catmull_rom(&cdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_reverse(curve, &rev);
+		TEST_ASSERT_STATUS(status);
+
+		/* Check start/end swap */
+		range = qaws_curve_get_parameter_range(curve);
+		qaws_curve_evaluate_2d(curve, range.min_value,
+			QAWS_EVAL_FLAG_POSITION, &r_orig);
+		range = qaws_curve_get_parameter_range(rev);
+		qaws_curve_evaluate_2d(rev, range.max_value,
+			QAWS_EVAL_FLAG_POSITION, &r_rev);
+		TEST_ASSERT(approx_eq(r_orig.position.x, r_rev.position.x),
+			"catmull reverse start x");
+		TEST_ASSERT(approx_eq(r_orig.position.y, r_rev.position.y),
+			"catmull reverse start y");
+
+		qaws_curve_destroy(rev);
+		qaws_curve_destroy(curve);
+	}
+
+	/* Hermite reverse */
+	{
+		qaws_vec2 pts[] = { {0,0}, {2,0} };
+		qaws_vec2 ders[] = { {1,1}, {1,-1} };
+		qaws_hermite_desc hdesc;
+		qaws_curve *curve = NULL;
+		qaws_curve *rev = NULL;
+		qaws_eval_result_2d r_orig, r_rev;
+		qaws_status status;
+
+		hdesc.dimension = QAWS_DIMENSION_2D;
+		hdesc.degree = 3;
+		hdesc.points = pts;
+		hdesc.derivatives = ders;
+		hdesc.point_count = 2;
+		hdesc.derivative_count = 2;
+
+		status = qaws_curve_create_hermite(&hdesc, &curve);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_reverse(curve, &rev);
+		TEST_ASSERT_STATUS(status);
+
+		qaws_curve_evaluate_2d(curve, (qaws_scalar)0.0,
+			QAWS_EVAL_FLAG_POSITION, &r_orig);
+		qaws_curve_evaluate_2d(rev, (qaws_scalar)1.0,
+			QAWS_EVAL_FLAG_POSITION, &r_rev);
+		TEST_ASSERT(approx_eq(r_orig.position.x, r_rev.position.x),
+			"hermite reverse x");
+		TEST_ASSERT(approx_eq(r_orig.position.y, r_rev.position.y),
+			"hermite reverse y");
+
+		qaws_curve_destroy(rev);
+		qaws_curve_destroy(curve);
+	}
+
+	/* NULL argument */
+	{
+		qaws_curve *rev = NULL;
+		qaws_status status = qaws_curve_reverse(NULL, &rev);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "reverse null curve");
+	}
+}
+
+/* ================================================================== */
+/* Easing function tests                                               */
+/* ================================================================== */
+
+static void test_easing(void)
+{
+	printf("test_easing\n");
+
+	/* Create a simple curve and traversal with easing */
+	qaws_vec2 pts[] = { {0,0}, {1,1}, {2,0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve = NULL;
+	qaws_status status;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 2;
+	bdesc.control_points = pts;
+	bdesc.control_point_count = 3;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve);
+	TEST_ASSERT_STATUS(status);
+
+	/* Linear easing: same as no easing */
+	{
+		qaws_traversal_desc tdesc;
+		qaws_traversal *trav = NULL;
+		qaws_eval_result_2d r_linear, r_eased;
+
+		memset(&tdesc, 0, sizeof(tdesc));
+		tdesc.traversal_mode = QAWS_TRAVERSAL_MODE_TIME;
+		tdesc.motion_profile = QAWS_MOTION_PROFILE_CONSTANT_SPEED;
+		tdesc.speed = (qaws_scalar)1.0;
+		tdesc.start_time = (qaws_scalar)0.0;
+		tdesc.end_time = (qaws_scalar)1.0;
+		tdesc.clamp_to_domain = 1;
+		tdesc.easing = QAWS_EASING_LINEAR;
+		tdesc.wrap_mode = QAWS_WRAP_CLAMP;
+
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_traversal_evaluate_2d(
+			trav, (qaws_scalar)0.5, QAWS_EVAL_FLAG_POSITION, &r_linear);
+		TEST_ASSERT_STATUS(status);
+
+		qaws_traversal_destroy(trav);
+
+		/* Quad ease-in: at t=0.5, eased_t = 0.25, so position should be earlier */
+		tdesc.easing = QAWS_EASING_QUAD_IN;
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_traversal_evaluate_2d(
+			trav, (qaws_scalar)0.5, QAWS_EVAL_FLAG_POSITION, &r_eased);
+		TEST_ASSERT_STATUS(status);
+
+		/* Eased position should differ from linear */
+		TEST_ASSERT(
+			!approx_eq(r_linear.position.x, r_eased.position.x) ||
+			!approx_eq(r_linear.position.y, r_eased.position.y),
+			"ease-in differs from linear at t=0.5");
+
+		qaws_traversal_destroy(trav);
+	}
+
+	/* Sine easing endpoints: at t=0 should be start, at t=1 should be end */
+	{
+		qaws_traversal_desc tdesc;
+		qaws_traversal *trav = NULL;
+		qaws_eval_result_2d r_start, r_end;
+
+		memset(&tdesc, 0, sizeof(tdesc));
+		tdesc.traversal_mode = QAWS_TRAVERSAL_MODE_TIME;
+		tdesc.motion_profile = QAWS_MOTION_PROFILE_CONSTANT_SPEED;
+		tdesc.speed = (qaws_scalar)1.0;
+		tdesc.start_time = (qaws_scalar)0.0;
+		tdesc.end_time = (qaws_scalar)1.0;
+		tdesc.clamp_to_domain = 1;
+		tdesc.easing = QAWS_EASING_SINE_IN_OUT;
+		tdesc.wrap_mode = QAWS_WRAP_CLAMP;
+
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		qaws_traversal_evaluate_2d(
+			trav, (qaws_scalar)0.0, QAWS_EVAL_FLAG_POSITION, &r_start);
+		qaws_traversal_evaluate_2d(
+			trav, (qaws_scalar)1.0, QAWS_EVAL_FLAG_POSITION, &r_end);
+
+		/* Start should be near (0,0) */
+		TEST_ASSERT(approx_eq(r_start.position.x, (qaws_scalar)0.0),
+			"eased start x near 0");
+
+		qaws_traversal_destroy(trav);
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+/* ================================================================== */
+/* Wrap mode tests                                                     */
+/* ================================================================== */
+
+static void test_wrap_modes(void)
+{
+	printf("test_wrap_modes\n");
+
+	qaws_vec2 pts[] = { {0,0}, {1,1}, {2,0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve = NULL;
+	qaws_status status;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 2;
+	bdesc.control_points = pts;
+	bdesc.control_point_count = 3;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve);
+	TEST_ASSERT_STATUS(status);
+
+	/* Loop mode: going past end wraps around */
+	{
+		qaws_traversal_desc tdesc;
+		qaws_traversal *trav = NULL;
+		qaws_eval_result_2d r_a, r_b;
+		qaws_scalar total_len;
+		qaws_scalar eps = (qaws_scalar)0.05;
+
+		memset(&tdesc, 0, sizeof(tdesc));
+		tdesc.traversal_mode = QAWS_TRAVERSAL_MODE_ARC_LENGTH;
+		tdesc.clamp_to_domain = 1;
+		tdesc.wrap_mode = QAWS_WRAP_LOOP;
+
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		{
+			qaws_range pr = qaws_curve_get_parameter_range(curve);
+			qaws_curve_compute_arc_length(curve,
+				pr.min_value, pr.max_value, &total_len);
+		}
+
+		/* distance=eps and distance=total_len+eps should map to same point */
+		qaws_traversal_evaluate_2d(
+			trav, eps, QAWS_EVAL_FLAG_POSITION, &r_a);
+		qaws_traversal_evaluate_2d(
+			trav, total_len + eps, QAWS_EVAL_FLAG_POSITION, &r_b);
+
+		TEST_ASSERT(approx_eq(r_a.position.x, r_b.position.x),
+			"loop wraps to start x");
+		TEST_ASSERT(approx_eq(r_a.position.y, r_b.position.y),
+			"loop wraps to start y");
+
+		qaws_traversal_destroy(trav);
+	}
+
+	/* Ping-pong mode: d=eps and d=2*total_len+eps should match */
+	{
+		qaws_traversal_desc tdesc;
+		qaws_traversal *trav = NULL;
+		qaws_eval_result_2d r_a, r_b;
+		qaws_scalar total_len;
+		qaws_scalar eps = (qaws_scalar)0.05;
+
+		memset(&tdesc, 0, sizeof(tdesc));
+		tdesc.traversal_mode = QAWS_TRAVERSAL_MODE_ARC_LENGTH;
+		tdesc.clamp_to_domain = 1;
+		tdesc.wrap_mode = QAWS_WRAP_PING_PONG;
+
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		{
+			qaws_range pr = qaws_curve_get_parameter_range(curve);
+			qaws_curve_compute_arc_length(curve,
+				pr.min_value, pr.max_value, &total_len);
+		}
+
+		qaws_traversal_evaluate_2d(
+			trav, eps, QAWS_EVAL_FLAG_POSITION, &r_a);
+		qaws_traversal_evaluate_2d(
+			trav, (qaws_scalar)2.0 * total_len + eps, QAWS_EVAL_FLAG_POSITION, &r_b);
+
+		TEST_ASSERT(approx_eq(r_a.position.x, r_b.position.x),
+			"ping-pong returns to start x");
+		TEST_ASSERT(approx_eq(r_a.position.y, r_b.position.y),
+			"ping-pong returns to start y");
+
+		qaws_traversal_destroy(trav);
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+/* ================================================================== */
+/* Traversal advance (iterator) tests                                  */
+/* ================================================================== */
+
+static void test_traversal_advance(void)
+{
+	printf("test_traversal_advance\n");
+
+	qaws_vec2 pts[] = { {0,0}, {2,2}, {4,0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve = NULL;
+	qaws_status status;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 2;
+	bdesc.control_points = pts;
+	bdesc.control_point_count = 3;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve);
+	TEST_ASSERT_STATUS(status);
+
+	{
+		qaws_traversal_desc tdesc;
+		qaws_traversal *trav = NULL;
+		qaws_eval_result_2d r1, r2, r3;
+
+		memset(&tdesc, 0, sizeof(tdesc));
+		tdesc.traversal_mode = QAWS_TRAVERSAL_MODE_ARC_LENGTH;
+		tdesc.motion_profile = QAWS_MOTION_PROFILE_CONSTANT_SPEED;
+		tdesc.speed = (qaws_scalar)1.0;
+		tdesc.clamp_to_domain = 1;
+		tdesc.wrap_mode = QAWS_WRAP_CLAMP;
+
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		/* First advance: should move forward from distance=0 */
+		status = qaws_traversal_advance_2d(
+			trav, (qaws_scalar)0.1, QAWS_EVAL_FLAG_POSITION, &r1);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(r1.position.x > (qaws_scalar)0.0, "advance moves forward x");
+
+		/* Second advance: should be further along */
+		status = qaws_traversal_advance_2d(
+			trav, (qaws_scalar)0.1, QAWS_EVAL_FLAG_POSITION, &r2);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(r2.position.x > r1.position.x, "second advance further");
+
+		/* Reset should go back to start */
+		status = qaws_traversal_reset(trav);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_traversal_advance_2d(
+			trav, (qaws_scalar)0.0, QAWS_EVAL_FLAG_POSITION, &r3);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(approx_eq(r3.position.x, (qaws_scalar)0.0),
+			"reset goes to start x");
+		TEST_ASSERT(approx_eq(r3.position.y, (qaws_scalar)0.0),
+			"reset goes to start y");
+
+		/* Loop mode advance: should wrap around */
+		qaws_traversal_destroy(trav);
+		tdesc.wrap_mode = QAWS_WRAP_LOOP;
+		status = qaws_traversal_create(curve, &tdesc, &trav);
+		TEST_ASSERT_STATUS(status);
+
+		/* Advance a large amount */
+		status = qaws_traversal_advance_2d(
+			trav, (qaws_scalar)100.0, QAWS_EVAL_FLAG_POSITION, &r1);
+		TEST_ASSERT_STATUS(status);
+		/* Should still be valid (not NaN) */
+		TEST_ASSERT(r1.position.x == r1.position.x, "loop advance valid x");
+
+		/* NULL checks */
+		status = qaws_traversal_advance_2d(NULL, (qaws_scalar)0.1,
+			QAWS_EVAL_FLAG_POSITION, &r1);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "advance null trav");
+
+		status = qaws_traversal_reset(NULL);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "reset null");
+
+		qaws_traversal_destroy(trav);
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+/* ================================================================== */
+/* Adaptive eval sampling tests                                        */
+/* ================================================================== */
+
+static void test_adaptive_eval_sampling(void)
+{
+	printf("test_adaptive_eval_sampling\n");
+
+	qaws_vec2 pts[] = { {0,0}, {0,4}, {4,4}, {4,0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve = NULL;
+	qaws_status status;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 3;
+	bdesc.control_points = pts;
+	bdesc.control_point_count = 4;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve);
+	TEST_ASSERT_STATUS(status);
+
+	/* Uniform eval sampling baseline */
+	{
+		qaws_sampling_desc sdesc;
+		qaws_eval_result_2d samples[2048];
+		unsigned int count = 0;
+
+		memset(&sdesc, 0, sizeof(sdesc));
+		sdesc.sample_count = 8;
+		sdesc.use_adaptive_sampling = 0;
+
+		status = qaws_curve_sample_eval_2d(
+			curve, &sdesc, samples, 2048, &count);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(count == 8, "uniform eval gives 8");
+	}
+
+	/* Adaptive eval sampling should produce more points and include derivatives */
+	{
+		qaws_sampling_desc sdesc;
+		qaws_eval_result_2d samples[2048];
+		unsigned int count = 0;
+		int has_d1 = 1;
+		unsigned int i;
+
+		memset(&sdesc, 0, sizeof(sdesc));
+		sdesc.sample_count = 8;
+		sdesc.use_adaptive_sampling = 1;
+		sdesc.error_tolerance = (qaws_scalar)0.001;
+
+		status = qaws_curve_sample_eval_2d(
+			curve, &sdesc, samples, 2048, &count);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(count >= 8, "adaptive eval >= initial");
+
+		/* Check that derivatives are populated */
+		for (i = 0; i < count && i < 5; ++i)
+		{
+			if (samples[i].d1.x == (qaws_scalar)0.0 &&
+				samples[i].d1.y == (qaws_scalar)0.0)
+				has_d1 = 0;
+		}
+		TEST_ASSERT(has_d1, "adaptive eval has D1 data");
+	}
+
+	/* 3D adaptive eval */
+	{
+		qaws_vec3 pts3d[] = { {0,0,0}, {0,4,2}, {4,4,2}, {4,0,0} };
+		qaws_curve *curve3d = NULL;
+		qaws_eval_result_3d samples3d[2048];
+		unsigned int count3d = 0;
+		qaws_sampling_desc sdesc;
+
+		bdesc.dimension = QAWS_DIMENSION_3D;
+		bdesc.control_points = pts3d;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve3d);
+		TEST_ASSERT_STATUS(status);
+
+		memset(&sdesc, 0, sizeof(sdesc));
+		sdesc.sample_count = 8;
+		sdesc.use_adaptive_sampling = 1;
+		sdesc.error_tolerance = (qaws_scalar)0.01;
+
+		status = qaws_curve_sample_eval_3d(
+			curve3d, &sdesc, samples3d, 2048, &count3d);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(count3d >= 8, "3D adaptive eval >= initial");
+
+		qaws_curve_destroy(curve3d);
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+/* ================================================================== */
+/* Geometric helpers tests                                             */
+/* ================================================================== */
+
+static void test_geometric_helpers(void)
+{
+	printf("test_geometric_helpers\n");
+
+	/* Create a known curve: quadratic Bezier in 2D */
+	qaws_vec2 pts2d[] = { {0, 0}, {1, 2}, {2, 0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve2d = NULL;
+	qaws_status status;
+	qaws_vec2 tangent2d;
+	qaws_scalar curvature2d, speed_val;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 2;
+	bdesc.control_points = pts2d;
+	bdesc.control_point_count = 3;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve2d);
+	TEST_ASSERT_STATUS(status);
+
+	/* Tangent at t=0 should point roughly toward (1,2), normalized */
+	status = qaws_curve_compute_tangent_2d(curve2d, (qaws_scalar)0.0, &tangent2d);
+	TEST_ASSERT_STATUS(status);
+	{
+		qaws_scalar len = (qaws_scalar)sqrt(
+			(double)(tangent2d.x * tangent2d.x + tangent2d.y * tangent2d.y));
+		TEST_ASSERT(approx_eq(len, (qaws_scalar)1.0), "tangent is unit length");
+	}
+	TEST_ASSERT(tangent2d.x > (qaws_scalar)0.0, "tangent2d x > 0 at t=0");
+	TEST_ASSERT(tangent2d.y > (qaws_scalar)0.0, "tangent2d y > 0 at t=0");
+
+	/* Tangent at t=0.5 should be horizontal (symmetric parabola) */
+	status = qaws_curve_compute_tangent_2d(curve2d, (qaws_scalar)0.5, &tangent2d);
+	TEST_ASSERT_STATUS(status);
+	TEST_ASSERT(approx_eq(tangent2d.y, (qaws_scalar)0.0), "tangent horizontal at midpoint");
+
+	/* Curvature should be negative (concave down parabola) */
+	status = qaws_curve_compute_curvature_2d(
+		curve2d, (qaws_scalar)0.5, &curvature2d);
+	TEST_ASSERT_STATUS(status);
+	TEST_ASSERT(curvature2d < (qaws_scalar)0.0, "negative curvature for concave-down");
+
+	/* Speed at t=0 */
+	status = qaws_curve_compute_speed(curve2d, (qaws_scalar)0.0, &speed_val);
+	TEST_ASSERT_STATUS(status);
+	TEST_ASSERT(speed_val > (qaws_scalar)0.0, "speed > 0");
+
+	/* Dimension mismatch errors */
+	{
+		qaws_vec3 tangent3d;
+		qaws_scalar curvature3d, torsion;
+
+		status = qaws_curve_compute_tangent_3d(
+			curve2d, (qaws_scalar)0.5, &tangent3d);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_DIMENSION,
+			"tangent_3d rejects 2D curve");
+
+		status = qaws_curve_compute_curvature_3d(
+			curve2d, (qaws_scalar)0.5, &curvature3d);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_DIMENSION,
+			"curvature_3d rejects 2D curve");
+
+		status = qaws_curve_compute_torsion_3d(
+			curve2d, (qaws_scalar)0.5, &torsion);
+		TEST_ASSERT(status == QAWS_STATUS_INVALID_DIMENSION,
+			"torsion_3d rejects 2D curve");
+	}
+
+	qaws_curve_destroy(curve2d);
+
+	/* 3D curve tests */
+	{
+		qaws_vec3 pts3d[] = { {0,0,0}, {1,2,0}, {2,0,0} };
+		qaws_curve *curve3d = NULL;
+		qaws_vec3 tangent3d;
+		qaws_scalar curvature3d, torsion, speed3d;
+
+		bdesc.dimension = QAWS_DIMENSION_3D;
+		bdesc.degree = 2;
+		bdesc.control_points = pts3d;
+		bdesc.control_point_count = 3;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve3d);
+		TEST_ASSERT_STATUS(status);
+
+		status = qaws_curve_compute_tangent_3d(
+			curve3d, (qaws_scalar)0.0, &tangent3d);
+		TEST_ASSERT_STATUS(status);
+		{
+			qaws_scalar len = (qaws_scalar)sqrt((double)(
+				tangent3d.x * tangent3d.x +
+				tangent3d.y * tangent3d.y +
+				tangent3d.z * tangent3d.z));
+			TEST_ASSERT(approx_eq(len, (qaws_scalar)1.0), "3D tangent is unit length");
+		}
+
+		status = qaws_curve_compute_curvature_3d(
+			curve3d, (qaws_scalar)0.5, &curvature3d);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(curvature3d > (qaws_scalar)0.0, "3D curvature > 0");
+
+		/* Planar curve has zero torsion */
+		status = qaws_curve_compute_torsion_3d(
+			curve3d, (qaws_scalar)0.5, &torsion);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(approx_eq(torsion, (qaws_scalar)0.0),
+			"planar curve has zero torsion");
+
+		status = qaws_curve_compute_speed(
+			curve3d, (qaws_scalar)0.0, &speed3d);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(speed3d > (qaws_scalar)0.0, "3D speed > 0");
+
+		qaws_curve_destroy(curve3d);
+	}
+
+	/* NULL argument tests */
+	status = qaws_curve_compute_tangent_2d(NULL, (qaws_scalar)0.0, &tangent2d);
+	TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "tangent null curve");
+
+	status = qaws_curve_compute_speed(NULL, (qaws_scalar)0.0, &speed_val);
+	TEST_ASSERT(status == QAWS_STATUS_INVALID_ARGUMENT, "speed null curve");
+}
+
+/* ================================================================== */
+/* Adaptive sampling tests                                             */
+/* ================================================================== */
+
+static void test_adaptive_sampling(void)
+{
+	printf("test_adaptive_sampling\n");
+
+	/* Create a curve with high curvature variation: cubic Bezier */
+	qaws_vec2 pts[] = { {0,0}, {0,4}, {4,4}, {4,0} };
+	qaws_bezier_desc bdesc;
+	qaws_curve *curve = NULL;
+	qaws_status status;
+	qaws_sampling_desc sdesc;
+	qaws_vec2 positions[2048];
+	unsigned int count = 0;
+
+	bdesc.dimension = QAWS_DIMENSION_2D;
+	bdesc.degree = 3;
+	bdesc.control_points = pts;
+	bdesc.control_point_count = 4;
+
+	status = qaws_curve_create_bezier(&bdesc, &curve);
+	TEST_ASSERT_STATUS(status);
+
+	/* Uniform sampling for baseline */
+	memset(&sdesc, 0, sizeof(sdesc));
+	sdesc.sample_count = 8;
+	sdesc.use_adaptive_sampling = 0;
+
+	status = qaws_curve_sample_2d(curve, &sdesc, positions, 2048, &count);
+	TEST_ASSERT_STATUS(status);
+	TEST_ASSERT(count == 8, "uniform gives exactly 8 samples");
+
+	/* Adaptive sampling with tight tolerance should produce more points */
+	memset(&sdesc, 0, sizeof(sdesc));
+	sdesc.sample_count = 8;
+	sdesc.use_adaptive_sampling = 1;
+	sdesc.error_tolerance = (qaws_scalar)0.001;
+
+	status = qaws_curve_sample_2d(curve, &sdesc, positions, 2048, &count);
+	TEST_ASSERT_STATUS(status);
+	TEST_ASSERT(count >= 8, "adaptive produces >= initial samples");
+
+	/* Adaptive with loose tolerance should produce fewer subdivisions */
+	{
+		unsigned int count_tight = count;
+		unsigned int count_loose;
+
+		memset(&sdesc, 0, sizeof(sdesc));
+		sdesc.sample_count = 8;
+		sdesc.use_adaptive_sampling = 1;
+		sdesc.error_tolerance = (qaws_scalar)1.0;
+
+		status = qaws_curve_sample_2d(
+			curve, &sdesc, positions, 2048, &count_loose);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(count_loose <= count_tight,
+			"loose tolerance <= tight tolerance samples");
+	}
+
+	/* Verify all points lie on the curve (roughly) */
+	{
+		unsigned int i;
+		int all_valid = 1;
+		for (i = 0; i < count; ++i)
+		{
+			if (positions[i].x < (qaws_scalar)-0.1 ||
+				positions[i].x > (qaws_scalar)4.1 ||
+				positions[i].y < (qaws_scalar)-0.1 ||
+				positions[i].y > (qaws_scalar)4.1)
+			{
+				all_valid = 0;
+				break;
+			}
+		}
+		TEST_ASSERT(all_valid, "adaptive points within curve bounds");
+	}
+
+	/* Test 3D adaptive sampling */
+	{
+		qaws_vec3 pts3d[] = { {0,0,0}, {0,4,2}, {4,4,2}, {4,0,0} };
+		qaws_curve *curve3d = NULL;
+		qaws_vec3 positions3d[2048];
+		unsigned int count3d = 0;
+
+		bdesc.dimension = QAWS_DIMENSION_3D;
+		bdesc.degree = 3;
+		bdesc.control_points = pts3d;
+		bdesc.control_point_count = 4;
+
+		status = qaws_curve_create_bezier(&bdesc, &curve3d);
+		TEST_ASSERT_STATUS(status);
+
+		memset(&sdesc, 0, sizeof(sdesc));
+		sdesc.sample_count = 8;
+		sdesc.use_adaptive_sampling = 1;
+		sdesc.error_tolerance = (qaws_scalar)0.01;
+
+		status = qaws_curve_sample_3d(
+			curve3d, &sdesc, positions3d, 2048, &count3d);
+		TEST_ASSERT_STATUS(status);
+		TEST_ASSERT(count3d >= 8, "3D adaptive produces >= initial samples");
+
+		qaws_curve_destroy(curve3d);
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+/* ================================================================== */
 /* Yuksel C2 Interpolating Splines tests                               */
 /* ================================================================== */
 
@@ -2197,6 +3098,18 @@ int main(void)
 	test_span_continuity();
 	test_family_inspection();
 	test_error_handling();
+
+	/* Phase 1 tests */
+	test_frenet_frame();
+	test_curve_reverse();
+	test_easing();
+	test_wrap_modes();
+	test_traversal_advance();
+	test_adaptive_eval_sampling();
+
+	/* Geometric helpers & adaptive sampling */
+	test_geometric_helpers();
+	test_adaptive_sampling();
 
 	/* Yuksel C2 interpolating spline tests */
 	test_yuksel_bezier_mode();

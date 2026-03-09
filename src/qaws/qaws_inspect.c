@@ -556,3 +556,389 @@ qaws_status qaws_nurbs_get_weights(
 
 	return QAWS_STATUS_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Derived geometric helpers                                          */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_compute_tangent_2d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_vec2 *out_tangent)
+{
+	qaws_eval_result_2d result;
+	qaws_status status;
+	qaws_scalar len;
+
+	if (!curve || !out_tangent)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_2d(
+		curve, parameter, QAWS_EVAL_FLAG_D1, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	len = (qaws_scalar)sqrt(
+		(double)(result.d1.x * result.d1.x + result.d1.y * result.d1.y));
+
+	if (len < (qaws_scalar)1.0e-12)
+	{
+		out_tangent->x = (qaws_scalar)0.0;
+		out_tangent->y = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	out_tangent->x = result.d1.x / len;
+	out_tangent->y = result.d1.y / len;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_tangent_3d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_vec3 *out_tangent)
+{
+	qaws_eval_result_3d result;
+	qaws_status status;
+	qaws_scalar len;
+
+	if (!curve || !out_tangent)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_3d(
+		curve, parameter, QAWS_EVAL_FLAG_D1, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	len = (qaws_scalar)sqrt((double)(
+		result.d1.x * result.d1.x +
+		result.d1.y * result.d1.y +
+		result.d1.z * result.d1.z));
+
+	if (len < (qaws_scalar)1.0e-12)
+	{
+		out_tangent->x = (qaws_scalar)0.0;
+		out_tangent->y = (qaws_scalar)0.0;
+		out_tangent->z = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	out_tangent->x = result.d1.x / len;
+	out_tangent->y = result.d1.y / len;
+	out_tangent->z = result.d1.z / len;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_curvature_2d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_scalar *out_curvature)
+{
+	qaws_eval_result_2d result;
+	qaws_status status;
+	qaws_scalar speed;
+	qaws_scalar cross;
+
+	if (!curve || !out_curvature)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_2d(
+		curve, parameter, QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	speed = (qaws_scalar)sqrt((double)(
+		result.d1.x * result.d1.x + result.d1.y * result.d1.y));
+
+	if (speed < (qaws_scalar)1.0e-12)
+	{
+		*out_curvature = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	/* Signed curvature: (d1.x * d2.y - d1.y * d2.x) / |d1|^3 */
+	cross = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+	*out_curvature = cross / (speed * speed * speed);
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_curvature_3d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_scalar *out_curvature)
+{
+	qaws_eval_result_3d result;
+	qaws_status status;
+	qaws_scalar speed;
+	qaws_scalar cx, cy, cz;
+	qaws_scalar cross_len;
+
+	if (!curve || !out_curvature)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_3d(
+		curve, parameter, QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	speed = (qaws_scalar)sqrt((double)(
+		result.d1.x * result.d1.x +
+		result.d1.y * result.d1.y +
+		result.d1.z * result.d1.z));
+
+	if (speed < (qaws_scalar)1.0e-12)
+	{
+		*out_curvature = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	/* |d1 x d2| / |d1|^3 */
+	cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+	cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+	cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+	cross_len = (qaws_scalar)sqrt((double)(cx * cx + cy * cy + cz * cz));
+
+	*out_curvature = cross_len / (speed * speed * speed);
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_torsion_3d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_scalar *out_torsion)
+{
+	qaws_eval_result_3d result;
+	qaws_status status;
+	qaws_scalar cx, cy, cz;
+	qaws_scalar cross_len_sq;
+	qaws_scalar dot;
+
+	if (!curve || !out_torsion)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_3d(
+		curve, parameter,
+		QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3,
+		&result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	/* (d1 x d2) . d3 / |d1 x d2|^2 */
+	cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+	cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+	cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+	cross_len_sq = cx * cx + cy * cy + cz * cz;
+
+	if (cross_len_sq < (qaws_scalar)1.0e-24)
+	{
+		*out_torsion = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	dot = cx * result.d3.x + cy * result.d3.y + cz * result.d3.z;
+	*out_torsion = dot / cross_len_sq;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_speed(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_scalar *out_speed)
+{
+	qaws_status status;
+
+	if (!curve || !out_speed)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension == QAWS_DIMENSION_2D)
+	{
+		qaws_eval_result_2d result;
+		status = qaws_curve_evaluate_2d(
+			curve, parameter, QAWS_EVAL_FLAG_D1, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		*out_speed = (qaws_scalar)sqrt((double)(
+			result.d1.x * result.d1.x +
+			result.d1.y * result.d1.y));
+	}
+	else
+	{
+		qaws_eval_result_3d result;
+		status = qaws_curve_evaluate_3d(
+			curve, parameter, QAWS_EVAL_FLAG_D1, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		*out_speed = (qaws_scalar)sqrt((double)(
+			result.d1.x * result.d1.x +
+			result.d1.y * result.d1.y +
+			result.d1.z * result.d1.z));
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Frenet frame                                                       */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_compute_normal_2d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_vec2 *out_normal)
+{
+	qaws_eval_result_2d result;
+	qaws_status status;
+	qaws_scalar len;
+
+	if (!curve || !out_normal)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_2d(
+		curve, parameter, QAWS_EVAL_FLAG_D1, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	len = (qaws_scalar)sqrt(
+		(double)(result.d1.x * result.d1.x + result.d1.y * result.d1.y));
+
+	if (len < (qaws_scalar)1.0e-12)
+	{
+		out_normal->x = (qaws_scalar)0.0;
+		out_normal->y = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	/* Rotate normalized tangent 90 degrees CCW: (-ty, tx) */
+	out_normal->x = -result.d1.y / len;
+	out_normal->y =  result.d1.x / len;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_frenet_frame_3d(
+	qaws_curve const *curve,
+	qaws_scalar parameter,
+	qaws_vec3 *out_tangent,
+	qaws_vec3 *out_normal,
+	qaws_vec3 *out_binormal)
+{
+	qaws_eval_result_3d result;
+	qaws_status status;
+	qaws_scalar d1_len;
+	qaws_scalar tx, ty, tz;
+	qaws_scalar bx, by, bz;
+	qaws_scalar b_len;
+	qaws_scalar ax, ay, az;
+
+	if (!curve || !out_tangent || !out_normal || !out_binormal)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	status = qaws_curve_evaluate_3d(
+		curve, parameter,
+		QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	/* T = normalize(D1) */
+	d1_len = (qaws_scalar)sqrt((double)(
+		result.d1.x * result.d1.x +
+		result.d1.y * result.d1.y +
+		result.d1.z * result.d1.z));
+
+	if (d1_len < (qaws_scalar)1.0e-12)
+	{
+		out_tangent->x  = (qaws_scalar)0.0;
+		out_tangent->y  = (qaws_scalar)0.0;
+		out_tangent->z  = (qaws_scalar)0.0;
+		out_normal->x   = (qaws_scalar)0.0;
+		out_normal->y   = (qaws_scalar)0.0;
+		out_normal->z   = (qaws_scalar)0.0;
+		out_binormal->x = (qaws_scalar)0.0;
+		out_binormal->y = (qaws_scalar)0.0;
+		out_binormal->z = (qaws_scalar)0.0;
+		return QAWS_STATUS_OK;
+	}
+
+	tx = result.d1.x / d1_len;
+	ty = result.d1.y / d1_len;
+	tz = result.d1.z / d1_len;
+
+	/* B = normalize(D1 x D2) */
+	bx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+	by = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+	bz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+	b_len = (qaws_scalar)sqrt((double)(bx * bx + by * by + bz * bz));
+
+	if (b_len < (qaws_scalar)1.0e-12)
+	{
+		/*
+		 * D1 x D2 is near zero (straight line or inflection).
+		 * Pick an arbitrary vector not parallel to T, then
+		 * use cross products to build a perpendicular normal.
+		 */
+		ax = (qaws_scalar)0.0;
+		ay = (qaws_scalar)0.0;
+		az = (qaws_scalar)0.0;
+
+		/* Choose the axis least aligned with T */
+		if (tx * tx <= ty * ty && tx * tx <= tz * tz)
+			ax = (qaws_scalar)1.0;
+		else if (ty * ty <= tz * tz)
+			ay = (qaws_scalar)1.0;
+		else
+			az = (qaws_scalar)1.0;
+
+		/* B = normalize(T x arbitrary) */
+		bx = ty * az - tz * ay;
+		by = tz * ax - tx * az;
+		bz = tx * ay - ty * ax;
+		b_len = (qaws_scalar)sqrt((double)(bx * bx + by * by + bz * bz));
+
+		bx /= b_len;
+		by /= b_len;
+		bz /= b_len;
+	}
+	else
+	{
+		bx /= b_len;
+		by /= b_len;
+		bz /= b_len;
+	}
+
+	/* N = B x T */
+	out_tangent->x = tx;
+	out_tangent->y = ty;
+	out_tangent->z = tz;
+
+	out_normal->x = by * tz - bz * ty;
+	out_normal->y = bz * tx - bx * tz;
+	out_normal->z = bx * ty - by * tx;
+
+	out_binormal->x = bx;
+	out_binormal->y = by;
+	out_binormal->z = bz;
+
+	return QAWS_STATUS_OK;
+}

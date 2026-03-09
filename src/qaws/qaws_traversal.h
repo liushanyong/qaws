@@ -4,6 +4,12 @@
 #include "qaws_types.h"
 #include "qaws_status.h"
 
+/*
+ * Traversal evaluate and map functions are thread-safe for concurrent reads.
+ * qaws_traversal_advance_* and qaws_traversal_reset mutate state and require
+ * external synchronization when used from multiple threads.
+ */
+
 qaws_status qaws_traversal_create(
 	qaws_curve const* curve,
 	qaws_traversal_desc const* desc,
@@ -37,5 +43,20 @@ qaws_status qaws_traversal_map_parameter_to_distance(
 	qaws_traversal const* traversal,
 	qaws_scalar parameter,
 	qaws_scalar* out_distance);
+
+qaws_status qaws_traversal_advance_2d(
+	qaws_traversal* traversal,
+	qaws_scalar delta_time,
+	unsigned int eval_flags,
+	qaws_eval_result_2d* out_result);
+
+qaws_status qaws_traversal_advance_3d(
+	qaws_traversal* traversal,
+	qaws_scalar delta_time,
+	unsigned int eval_flags,
+	qaws_eval_result_3d* out_result);
+
+qaws_status qaws_traversal_reset(
+	qaws_traversal* traversal);
 
 #endif /* QAWS_TRAVERSAL_H */

@@ -7,6 +7,103 @@
 #include <math.h>
 
 /* ---------------------------------------------------------------------------
+ * Easing
+ * ------------------------------------------------------------------------- */
+
+#define QAWS_PI (qaws_scalar)3.14159265358979323846
+
+static qaws_scalar apply_easing(qaws_easing easing, qaws_scalar t)
+{
+	qaws_scalar inv;
+
+	switch (easing)
+	{
+	case QAWS_EASING_LINEAR:
+		return t;
+
+	case QAWS_EASING_QUAD_IN:
+		return t * t;
+
+	case QAWS_EASING_QUAD_OUT:
+		inv = (qaws_scalar)1.0 - t;
+		return (qaws_scalar)1.0 - inv * inv;
+
+	case QAWS_EASING_QUAD_IN_OUT:
+		if (t < (qaws_scalar)0.5)
+			return (qaws_scalar)2.0 * t * t;
+		inv = (qaws_scalar)1.0 - t;
+		return (qaws_scalar)1.0 - (qaws_scalar)2.0 * inv * inv;
+
+	case QAWS_EASING_CUBIC_IN:
+		return t * t * t;
+
+	case QAWS_EASING_CUBIC_OUT:
+		inv = (qaws_scalar)1.0 - t;
+		return (qaws_scalar)1.0 - inv * inv * inv;
+
+	case QAWS_EASING_CUBIC_IN_OUT:
+		if (t < (qaws_scalar)0.5)
+			return (qaws_scalar)4.0 * t * t * t;
+		inv = (qaws_scalar)1.0 - t;
+		return (qaws_scalar)1.0 - (qaws_scalar)4.0 * inv * inv * inv;
+
+	case QAWS_EASING_SINE_IN:
+		return (qaws_scalar)1.0 - (qaws_scalar)cos((double)(t * QAWS_PI / (qaws_scalar)2.0));
+
+	case QAWS_EASING_SINE_OUT:
+		return (qaws_scalar)sin((double)(t * QAWS_PI / (qaws_scalar)2.0));
+
+	case QAWS_EASING_SINE_IN_OUT:
+		return ((qaws_scalar)1.0 - (qaws_scalar)cos((double)(t * QAWS_PI))) / (qaws_scalar)2.0;
+
+	default:
+		return t;
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Wrap mode
+ * ------------------------------------------------------------------------- */
+
+static qaws_scalar apply_wrap(qaws_wrap_mode mode, qaws_scalar distance, qaws_scalar total_length)
+{
+	qaws_scalar wrapped;
+	qaws_scalar cycle;
+
+	if (total_length <= (qaws_scalar)0.0)
+		return (qaws_scalar)0.0;
+
+	switch (mode)
+	{
+	case QAWS_WRAP_CLAMP:
+		if (distance < (qaws_scalar)0.0)
+			return (qaws_scalar)0.0;
+		if (distance > total_length)
+			return total_length;
+		return distance;
+
+	case QAWS_WRAP_LOOP:
+		wrapped = (qaws_scalar)fmod((double)distance, (double)total_length);
+		if (wrapped < (qaws_scalar)0.0)
+			wrapped += total_length;
+		return wrapped;
+
+	case QAWS_WRAP_PING_PONG:
+		/* Fold into [0, 2*total_length) then mirror */
+		cycle = (qaws_scalar)2.0 * total_length;
+		wrapped = (qaws_scalar)fmod((double)distance, (double)cycle);
+		if (wrapped < (qaws_scalar)0.0)
+			wrapped += cycle;
+		if (wrapped > total_length)
+			wrapped = cycle - wrapped;
+		return wrapped;
+
+	default:
+		return distance;
+	}
+}
+
+/* ---------------------------------------------------------------------------
  * Motion profile: map time to distance
  * ------------------------------------------------------------------------- */
 
@@ -129,6 +226,7 @@ qaws_status qaws_traversal_create(
 	}
 
 	traversal->total_arc_length = traversal->table_distances[table_size - 1];
+	traversal->current_distance = (qaws_scalar)0.0;
 
 	*out_traversal = traversal;
 	return QAWS_STATUS_OK;
@@ -157,6 +255,9 @@ qaws_status qaws_traversal_evaluate_2d(
 	qaws_scalar parameter;
 	qaws_scalar distance;
 	qaws_range range;
+	qaws_scalar normalized_time;
+	qaws_scalar eased_time;
+	qaws_scalar time_span;
 
 	if (!traversal || !out_result)
 		return QAWS_STATUS_INVALID_ARGUMENT;
@@ -169,14 +270,33 @@ qaws_status qaws_traversal_evaluate_2d(
 
 	case QAWS_TRAVERSAL_MODE_ARC_LENGTH:
 		distance = input_value;
+		distance = apply_wrap(traversal->desc.wrap_mode, distance,
+			traversal->total_arc_length);
 		parameter = qaws_internal_distance_to_parameter(
 			traversal->table_params, traversal->table_distances,
 			traversal->table_size, distance);
 		break;
 
 	case QAWS_TRAVERSAL_MODE_TIME:
+		eased_time = input_value;
+		if (traversal->desc.easing != QAWS_EASING_LINEAR)
+		{
+			time_span = traversal->desc.end_time - traversal->desc.start_time;
+			if (time_span > (qaws_scalar)0.0)
+			{
+				normalized_time = (input_value - traversal->desc.start_time) / time_span;
+				if (normalized_time < (qaws_scalar)0.0)
+					normalized_time = (qaws_scalar)0.0;
+				if (normalized_time > (qaws_scalar)1.0)
+					normalized_time = (qaws_scalar)1.0;
+				normalized_time = apply_easing(traversal->desc.easing, normalized_time);
+				eased_time = traversal->desc.start_time + normalized_time * time_span;
+			}
+		}
 		distance = traversal_map_time_to_distance(
-			&traversal->desc, input_value);
+			&traversal->desc, eased_time);
+		distance = apply_wrap(traversal->desc.wrap_mode, distance,
+			traversal->total_arc_length);
 		parameter = qaws_internal_distance_to_parameter(
 			traversal->table_params, traversal->table_distances,
 			traversal->table_size, distance);
@@ -209,6 +329,9 @@ qaws_status qaws_traversal_evaluate_3d(
 	qaws_scalar parameter;
 	qaws_scalar distance;
 	qaws_range range;
+	qaws_scalar normalized_time;
+	qaws_scalar eased_time;
+	qaws_scalar time_span;
 
 	if (!traversal || !out_result)
 		return QAWS_STATUS_INVALID_ARGUMENT;
@@ -221,14 +344,33 @@ qaws_status qaws_traversal_evaluate_3d(
 
 	case QAWS_TRAVERSAL_MODE_ARC_LENGTH:
 		distance = input_value;
+		distance = apply_wrap(traversal->desc.wrap_mode, distance,
+			traversal->total_arc_length);
 		parameter = qaws_internal_distance_to_parameter(
 			traversal->table_params, traversal->table_distances,
 			traversal->table_size, distance);
 		break;
 
 	case QAWS_TRAVERSAL_MODE_TIME:
+		eased_time = input_value;
+		if (traversal->desc.easing != QAWS_EASING_LINEAR)
+		{
+			time_span = traversal->desc.end_time - traversal->desc.start_time;
+			if (time_span > (qaws_scalar)0.0)
+			{
+				normalized_time = (input_value - traversal->desc.start_time) / time_span;
+				if (normalized_time < (qaws_scalar)0.0)
+					normalized_time = (qaws_scalar)0.0;
+				if (normalized_time > (qaws_scalar)1.0)
+					normalized_time = (qaws_scalar)1.0;
+				normalized_time = apply_easing(traversal->desc.easing, normalized_time);
+				eased_time = traversal->desc.start_time + normalized_time * time_span;
+			}
+		}
 		distance = traversal_map_time_to_distance(
-			&traversal->desc, input_value);
+			&traversal->desc, eased_time);
+		distance = apply_wrap(traversal->desc.wrap_mode, distance,
+			traversal->total_arc_length);
 		parameter = qaws_internal_distance_to_parameter(
 			traversal->table_params, traversal->table_distances,
 			traversal->table_size, distance);
@@ -326,5 +468,86 @@ qaws_status qaws_traversal_map_parameter_to_distance(
 		traversal->table_params, traversal->table_distances,
 		traversal->table_size, parameter);
 
+	return QAWS_STATUS_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * Advance (iterator) functions
+ * ------------------------------------------------------------------------- */
+
+qaws_status qaws_traversal_advance_2d(
+	qaws_traversal *traversal,
+	qaws_scalar delta_time,
+	unsigned int eval_flags,
+	qaws_eval_result_2d *out_result)
+{
+	qaws_scalar distance;
+	qaws_scalar parameter;
+	qaws_range range;
+
+	if (!traversal || !out_result)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	traversal->current_distance += delta_time * traversal->desc.speed;
+	distance = apply_wrap(traversal->desc.wrap_mode,
+		traversal->current_distance, traversal->total_arc_length);
+
+	parameter = qaws_internal_distance_to_parameter(
+		traversal->table_params, traversal->table_distances,
+		traversal->table_size, distance);
+
+	if (traversal->desc.clamp_to_domain)
+	{
+		range = traversal->curve->parameter_range;
+		if (parameter < range.min_value)
+			parameter = range.min_value;
+		if (parameter > range.max_value)
+			parameter = range.max_value;
+	}
+
+	return qaws_curve_evaluate_2d(
+		traversal->curve, parameter, eval_flags, out_result);
+}
+
+qaws_status qaws_traversal_advance_3d(
+	qaws_traversal *traversal,
+	qaws_scalar delta_time,
+	unsigned int eval_flags,
+	qaws_eval_result_3d *out_result)
+{
+	qaws_scalar distance;
+	qaws_scalar parameter;
+	qaws_range range;
+
+	if (!traversal || !out_result)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	traversal->current_distance += delta_time * traversal->desc.speed;
+	distance = apply_wrap(traversal->desc.wrap_mode,
+		traversal->current_distance, traversal->total_arc_length);
+
+	parameter = qaws_internal_distance_to_parameter(
+		traversal->table_params, traversal->table_distances,
+		traversal->table_size, distance);
+
+	if (traversal->desc.clamp_to_domain)
+	{
+		range = traversal->curve->parameter_range;
+		if (parameter < range.min_value)
+			parameter = range.min_value;
+		if (parameter > range.max_value)
+			parameter = range.max_value;
+	}
+
+	return qaws_curve_evaluate_3d(
+		traversal->curve, parameter, eval_flags, out_result);
+}
+
+qaws_status qaws_traversal_reset(qaws_traversal *traversal)
+{
+	if (!traversal)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	traversal->current_distance = (qaws_scalar)0.0;
 	return QAWS_STATUS_OK;
 }
