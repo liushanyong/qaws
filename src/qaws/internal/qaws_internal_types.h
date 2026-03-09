@@ -1,0 +1,110 @@
+#ifndef QAWS_INTERNAL_TYPES_H
+#define QAWS_INTERNAL_TYPES_H
+
+#include "../qaws_types.h"
+#include "../qaws_status.h"
+
+typedef struct qaws_curve_vtable qaws_curve_vtable;
+
+struct qaws_curve
+{
+	qaws_curve_kind kind;
+	qaws_dimension dimension;
+	unsigned int degree;
+	unsigned int span_count;
+	qaws_range parameter_range;
+	qaws_scalar* span_boundaries;
+	qaws_curve_vtable const* vtable;
+	void* impl;
+};
+
+struct qaws_curve_vtable
+{
+	qaws_status (*eval_span_2d)(
+		qaws_curve const* curve,
+		unsigned int span_index,
+		qaws_scalar local_t,
+		unsigned int eval_flags,
+		qaws_eval_result_2d* out_result);
+
+	qaws_status (*eval_span_3d)(
+		qaws_curve const* curve,
+		unsigned int span_index,
+		qaws_scalar local_t,
+		unsigned int eval_flags,
+		qaws_eval_result_3d* out_result);
+
+	void (*destroy_impl)(void* impl);
+
+	int (*is_closed)(qaws_curve const* curve);
+	int (*is_periodic)(qaws_curve const* curve);
+	int (*is_rational)(qaws_curve const* curve);
+	qaws_continuity (*get_continuity)(qaws_curve const* curve);
+};
+
+struct qaws_traversal
+{
+	qaws_curve const* curve;
+	qaws_traversal_desc desc;
+	qaws_scalar total_arc_length;
+	unsigned int table_size;
+	qaws_scalar* table_params;
+	qaws_scalar* table_distances;
+};
+
+/* Family-specific impl structs */
+
+typedef struct qaws_bezier_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+} qaws_bezier_impl;
+
+typedef struct qaws_hermite_impl
+{
+	qaws_scalar* points;
+	qaws_scalar* tangents;
+	unsigned int point_count;
+} qaws_hermite_impl;
+
+typedef struct qaws_catmull_rom_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+	qaws_parameterization parameterization;
+	int closed;
+	qaws_scalar* knot_params;
+	qaws_scalar* segment_coeffs;
+} qaws_catmull_rom_impl;
+
+typedef struct qaws_bspline_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+	qaws_scalar* knots;
+	unsigned int knot_count;
+} qaws_bspline_impl;
+
+typedef struct qaws_nurbs_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+	qaws_scalar* knots;
+	unsigned int knot_count;
+	qaws_scalar* weights;
+	unsigned int weight_count;
+} qaws_nurbs_impl;
+
+typedef struct qaws_trajectory_impl
+{
+	qaws_scalar* key_positions;
+	unsigned int key_count;
+	qaws_scalar* key_times;
+	qaws_scalar* key_velocities;
+	unsigned int key_velocity_count;
+	qaws_scalar* key_accelerations;
+	unsigned int key_acceleration_count;
+	int closed;
+} qaws_trajectory_impl;
+
+#endif /* QAWS_INTERNAL_TYPES_H */

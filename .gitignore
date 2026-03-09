@@ -53,3 +53,30 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build directories
+tmp/
+projects/
+working_dir/
+
+# Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+.vs/
+
+# Test output
+tests_output/
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Sharpmake binaries (keep src/)
+buildsystem/sharpmake/*.exe
+buildsystem/sharpmake/*.dll
+buildsystem/sharpmake/*.json
+*.in
