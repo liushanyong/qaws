@@ -10,6 +10,7 @@
 #include "qaws_bspline.h"
 #include "qaws_nurbs.h"
 #include "qaws_trajectory.h"
+#include "qaws_yuksel.h"
 #include "qaws_eval.h"
 #include "qaws_sampling.h"
 #include "qaws_traversal.h"

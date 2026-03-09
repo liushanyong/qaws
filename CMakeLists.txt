@@ -51,6 +51,7 @@ set(QAWS_SOURCES
   src/qaws/qaws_bspline.c
   src/qaws/qaws_nurbs.c
   src/qaws/qaws_trajectory.c
+  src/qaws/qaws_yuksel.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
@@ -158,6 +159,7 @@ if(QAWS_INSTALL)
       src/qaws/qaws_bspline.h
       src/qaws/qaws_nurbs.h
       src/qaws/qaws_trajectory.h
+      src/qaws/qaws_yuksel.h
       src/qaws/qaws_eval.h
       src/qaws/qaws_sampling.h
       src/qaws/qaws_traversal.h

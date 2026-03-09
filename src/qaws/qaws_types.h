@@ -38,7 +38,8 @@ typedef enum qaws_curve_kind
 	QAWS_CURVE_KIND_CATMULL_ROM,
 	QAWS_CURVE_KIND_BSPLINE,
 	QAWS_CURVE_KIND_NURBS,
-	QAWS_CURVE_KIND_TRAJECTORY
+	QAWS_CURVE_KIND_TRAJECTORY,
+	QAWS_CURVE_KIND_YUKSEL
 } qaws_curve_kind;
 
 typedef enum qaws_parameterization

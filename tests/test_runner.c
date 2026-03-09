@@ -1755,6 +1755,416 @@ static void test_svg_all_families(void)
 	printf("  -> " SVG_OUTPUT_DIR "/all_families.svg\n");
 }
 
+/* ================================================================== */
+/* Yuksel C2 Interpolating Splines tests                               */
+/* ================================================================== */
+
+static void test_yuksel_bezier_mode(void)
+{
+	printf("test_yuksel_bezier_mode\n");
+
+	/* Triangle-ish open curve: 5 points */
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 2}, {2, 0}, {3, 2}, {4, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+	TEST_ASSERT(curve != NULL, "yuksel bezier curve allocated");
+	TEST_ASSERT(qaws_curve_get_kind(curve) == QAWS_CURVE_KIND_YUKSEL, "kind == YUKSEL");
+	TEST_ASSERT(qaws_curve_get_continuity(curve) == QAWS_CONTINUITY_C2, "continuity == C2");
+	TEST_ASSERT(qaws_curve_get_span_count(curve) == 4, "span_count == 4");
+	TEST_ASSERT(qaws_curve_is_closed(curve) == 0, "not closed");
+
+	/* Evaluate at parameter 0 (first span start) */
+	qaws_eval_result_2d r;
+	s = qaws_curve_evaluate_2d(curve, (qaws_scalar)0.0,
+		QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r);
+	TEST_ASSERT_STATUS(s);
+	TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_POSITION, "position valid");
+	TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D1, "d1 valid");
+
+	/* Evaluate at each integer parameter to check interpolation */
+	{
+		unsigned int pi;
+		qaws_range range = qaws_curve_get_parameter_range(curve);
+		/* Sample throughout to check no NaN or crash */
+		for (pi = 0; pi < 40; pi++) {
+			qaws_scalar t = range.min_value +
+				(qaws_scalar)pi * (range.max_value - range.min_value) / (qaws_scalar)39;
+			s = qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(s == QAWS_STATUS_OK, "eval ok across range");
+		}
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_closed(void)
+{
+	printf("test_yuksel_closed\n");
+
+	/* Pentagon */
+	qaws_vec2 points[5];
+	{
+		unsigned int pi;
+		for (pi = 0; pi < 5; pi++) {
+			qaws_scalar angle = (qaws_scalar)(2.0 * 3.14159265358979323846) * (qaws_scalar)pi / (qaws_scalar)5;
+			points[pi].x = (qaws_scalar)cos((double)angle);
+			points[pi].y = (qaws_scalar)sin((double)angle);
+		}
+	}
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+	desc.closed = 1;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+	TEST_ASSERT(qaws_curve_is_closed(curve) == 1, "closed");
+	TEST_ASSERT(qaws_curve_get_span_count(curve) == 5, "5 spans for closed pentagon");
+
+	/* Closed curve: first and last points should match */
+	qaws_eval_result_2d r0, r1;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	s = qaws_curve_evaluate_2d(curve, range.min_value, QAWS_EVAL_FLAG_POSITION, &r0);
+	TEST_ASSERT_STATUS(s);
+	s = qaws_curve_evaluate_2d(curve, range.max_value, QAWS_EVAL_FLAG_POSITION, &r1);
+	TEST_ASSERT_STATUS(s);
+	TEST_ASSERT(approx_eq(r0.position.x, r1.position.x), "closed: start.x == end.x");
+	TEST_ASSERT(approx_eq(r0.position.y, r1.position.y), "closed: start.y == end.y");
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_circular_mode(void)
+{
+	printf("test_yuksel_circular_mode\n");
+
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 1}, {2, 0}, {3, 1}, {4, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_CIRCULAR;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+
+	/* Sample throughout */
+	qaws_eval_result_2d r;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	unsigned int pi;
+	for (pi = 0; pi < 20; pi++) {
+		qaws_scalar t = range.min_value +
+			(qaws_scalar)pi * (range.max_value - range.min_value) / (qaws_scalar)19;
+		s = qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "circular eval ok");
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_elliptical_mode(void)
+{
+	printf("test_yuksel_elliptical_mode\n");
+
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 2}, {2, 0}, {3, 2}, {4, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_ELLIPTICAL;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+
+	qaws_eval_result_2d r;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	unsigned int pi;
+	for (pi = 0; pi < 20; pi++) {
+		qaws_scalar t = range.min_value +
+			(qaws_scalar)pi * (range.max_value - range.min_value) / (qaws_scalar)19;
+		s = qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "elliptical eval ok");
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_hybrid_mode(void)
+{
+	printf("test_yuksel_hybrid_mode\n");
+
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 2}, {2, 0}, {3, 2}, {4, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_HYBRID;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+
+	qaws_eval_result_2d r;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	unsigned int pi;
+	for (pi = 0; pi < 20; pi++) {
+		qaws_scalar t = range.min_value +
+			(qaws_scalar)pi * (range.max_value - range.min_value) / (qaws_scalar)19;
+		s = qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "hybrid eval ok");
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_3d(void)
+{
+	printf("test_yuksel_3d\n");
+
+	qaws_vec3 points[] = {
+		{0, 0, 0}, {1, 1, 1}, {2, 0, 2}, {3, 1, 1}, {4, 0, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_3D;
+	desc.control_points = points;
+	desc.control_point_count = 5;
+	desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT_STATUS(s);
+	TEST_ASSERT(qaws_curve_get_dimension(curve) == QAWS_DIMENSION_3D, "dim == 3D");
+
+	qaws_eval_result_3d r;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	unsigned int pi;
+	for (pi = 0; pi < 20; pi++) {
+		qaws_scalar t = range.min_value +
+			(qaws_scalar)pi * (range.max_value - range.min_value) / (qaws_scalar)19;
+		s = qaws_curve_evaluate_3d(curve, t, QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "3d eval ok");
+	}
+
+	qaws_curve_destroy(curve);
+}
+
+static void test_yuksel_error_handling(void)
+{
+	printf("test_yuksel_error_handling\n");
+
+	qaws_vec2 points[] = { {0, 0}, {1, 1} };
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 2; /* too few */
+	desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_status s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_CONTROL_POINT_COUNT, "too few points");
+	TEST_ASSERT(curve == NULL, "curve is NULL on error");
+
+	/* 3D with circular mode should fail */
+	qaws_vec3 pts3[] = { {0,0,0}, {1,1,1}, {2,0,0} };
+	desc.dimension = QAWS_DIMENSION_3D;
+	desc.control_points = pts3;
+	desc.control_point_count = 3;
+	desc.mode = QAWS_YUKSEL_MODE_CIRCULAR;
+	s = qaws_curve_create_yuksel(&desc, &curve);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "circular 3d rejected");
+
+	/* NULL desc */
+	s = qaws_curve_create_yuksel(NULL, &curve);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "null desc rejected");
+}
+
+/* SVG: Yuksel Bezier mode - wave pattern */
+static void test_svg_yuksel_bezier(void)
+{
+	printf("test_svg_yuksel_bezier\n");
+
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 2}, {2, -1}, {3, 2}, {4, -1}, {5, 2}, {6, 0}
+	};
+
+	qaws_yuksel_desc desc;
+	desc.dimension = QAWS_DIMENSION_2D;
+	desc.control_points = points;
+	desc.control_point_count = 7;
+	desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+	desc.closed = 0;
+
+	qaws_curve* curve = NULL;
+	qaws_curve_create_yuksel(&desc, &curve);
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/yuksel_bezier.svg",
+		(qaws_scalar)-0.5, (qaws_scalar)-2.0, (qaws_scalar)7.0, (qaws_scalar)5.0,
+		(qaws_scalar)600, (qaws_scalar)400))
+	{ qaws_curve_destroy(curve); return; }
+
+	qaws_vec2 samples[SVG_SAMPLES];
+	unsigned int count = svg_sample_curve(curve, samples, SVG_SAMPLES);
+	svg_polyline(&svg, samples, count, "#e94560", (qaws_scalar)2);
+	svg_dots(&svg, points, 7, "#50fa7b", (qaws_scalar)5);
+	svg_label(&svg, (qaws_scalar)-0.3, (qaws_scalar)2.8, "Yuksel Bezier", "#e94560");
+
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/yuksel_bezier.svg\n");
+	qaws_curve_destroy(curve);
+}
+
+/* SVG: Yuksel closed pentagon - all 4 modes comparison */
+static void test_svg_yuksel_modes(void)
+{
+	printf("test_svg_yuksel_modes\n");
+
+	qaws_vec2 points[6];
+	{
+		unsigned int pi;
+		for (pi = 0; pi < 6; pi++) {
+			qaws_scalar angle = (qaws_scalar)(2.0 * 3.14159265358979323846) * (qaws_scalar)pi / (qaws_scalar)6;
+			points[pi].x = (qaws_scalar)(2.0 * cos((double)angle));
+			points[pi].y = (qaws_scalar)(2.0 * sin((double)angle));
+		}
+	}
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/yuksel_modes.svg",
+		(qaws_scalar)-3.0, (qaws_scalar)-3.0, (qaws_scalar)6.0, (qaws_scalar)6.0,
+		(qaws_scalar)500, (qaws_scalar)500))
+		return;
+
+	char const* colors[] = { "#e94560", "#f5a623", "#50fa7b", "#78dce8" };
+	char const* names[] = { "Bezier", "Circular", "Elliptical", "Hybrid" };
+	int modes[] = {
+		QAWS_YUKSEL_MODE_BEZIER,
+		QAWS_YUKSEL_MODE_CIRCULAR,
+		QAWS_YUKSEL_MODE_ELLIPTICAL,
+		QAWS_YUKSEL_MODE_HYBRID
+	};
+
+	unsigned int m;
+	for (m = 0; m < 4; m++) {
+		qaws_yuksel_desc desc;
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.control_points = points;
+		desc.control_point_count = 6;
+		desc.mode = (qaws_yuksel_mode)modes[m];
+		desc.closed = 1;
+
+		qaws_curve* curve = NULL;
+		if (qaws_curve_create_yuksel(&desc, &curve) == QAWS_STATUS_OK) {
+			qaws_vec2 samples[SVG_SAMPLES];
+			unsigned int count = svg_sample_curve(curve, samples, SVG_SAMPLES);
+			svg_polyline(&svg, samples, count, colors[m], (qaws_scalar)1.5);
+			qaws_curve_destroy(curve);
+		}
+
+		svg_label(&svg, (qaws_scalar)-2.8, (qaws_scalar)2.8 - (qaws_scalar)m * (qaws_scalar)0.35,
+			names[m], colors[m]);
+	}
+
+	svg_dots(&svg, points, 6, "#ffffff", (qaws_scalar)4);
+	svg_label(&svg, (qaws_scalar)-2.8, (qaws_scalar)3.2, "Yuksel modes (hexagon)", "#8888aa");
+
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/yuksel_modes.svg\n");
+}
+
+/* SVG: Yuksel vs Catmull-Rom comparison */
+static void test_svg_yuksel_vs_catmull(void)
+{
+	printf("test_svg_yuksel_vs_catmull\n");
+
+	qaws_vec2 points[] = {
+		{0, 0}, {1, 2}, {2, -0.5}, {3, 1.5}, {4, 0}
+	};
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/yuksel_vs_catmull.svg",
+		(qaws_scalar)-0.5, (qaws_scalar)-1.5, (qaws_scalar)5.5, (qaws_scalar)4.5,
+		(qaws_scalar)600, (qaws_scalar)400))
+		return;
+
+	/* Yuksel Bezier */
+	{
+		qaws_yuksel_desc desc;
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.control_points = points;
+		desc.control_point_count = 5;
+		desc.mode = QAWS_YUKSEL_MODE_BEZIER;
+		desc.closed = 0;
+
+		qaws_curve* curve = NULL;
+		if (qaws_curve_create_yuksel(&desc, &curve) == QAWS_STATUS_OK) {
+			qaws_vec2 samples[SVG_SAMPLES];
+			unsigned int count = svg_sample_curve(curve, samples, SVG_SAMPLES);
+			svg_polyline(&svg, samples, count, "#e94560", (qaws_scalar)2);
+			qaws_curve_destroy(curve);
+		}
+	}
+
+	/* Catmull-Rom centripetal (needs 2 extra ghost points) */
+	{
+		qaws_vec2 cr_pts[] = {
+			{-1, -2}, {0, 0}, {1, 2}, {2, -0.5}, {3, 1.5}, {4, 0}, {5, -2}
+		};
+		qaws_catmull_rom_desc desc;
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.control_points = cr_pts;
+		desc.control_point_count = 7;
+		desc.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+		desc.closed = 0;
+
+		qaws_curve* curve = NULL;
+		if (qaws_curve_create_catmull_rom(&desc, &curve) == QAWS_STATUS_OK) {
+			qaws_vec2 samples[SVG_SAMPLES];
+			unsigned int count = svg_sample_curve(curve, samples, SVG_SAMPLES);
+			svg_polyline(&svg, samples, count, "#50fa7b", (qaws_scalar)2);
+			qaws_curve_destroy(curve);
+		}
+	}
+
+	svg_dots(&svg, points, 5, "#ffffff", (qaws_scalar)5);
+	svg_label(&svg, (qaws_scalar)-0.3, (qaws_scalar)2.8, "Yuksel (red) vs Catmull-Rom (green)", "#8888aa");
+
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/yuksel_vs_catmull.svg\n");
+}
+
 int main(void)
 {
 	printf("=== Qaws Test Suite ===\n\n");
@@ -1788,6 +2198,15 @@ int main(void)
 	test_family_inspection();
 	test_error_handling();
 
+	/* Yuksel C2 interpolating spline tests */
+	test_yuksel_bezier_mode();
+	test_yuksel_closed();
+	test_yuksel_circular_mode();
+	test_yuksel_elliptical_mode();
+	test_yuksel_hybrid_mode();
+	test_yuksel_3d();
+	test_yuksel_error_handling();
+
 	/* SVG visual tests */
 	printf("\n--- SVG Visual Tests ---\n");
 	svg_ensure_output_dir();
@@ -1799,6 +2218,9 @@ int main(void)
 	test_svg_nurbs_ellipse();
 	test_svg_hermite_figure8();
 	test_svg_all_families();
+	test_svg_yuksel_bezier();
+	test_svg_yuksel_modes();
+	test_svg_yuksel_vs_catmull();
 
 	printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
 	return g_fail > 0 ? 1 : 0;

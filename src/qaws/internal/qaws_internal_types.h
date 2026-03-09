@@ -107,4 +107,32 @@ typedef struct qaws_trajectory_impl
 	int closed;
 } qaws_trajectory_impl;
 
+typedef struct qaws_yuksel_subcurve
+{
+	/* Quadratic Bezier sub-curve: p0, p1, p2, and the optimal t parameter */
+	qaws_scalar p0[3];
+	qaws_scalar p1[3];
+	qaws_scalar p2[3];
+	qaws_scalar t1;
+	/* Circular/elliptical: center, radius, angle limits */
+	qaws_scalar center[3];
+	qaws_scalar radius;
+	qaws_scalar angle_start;
+	qaws_scalar angle_end;
+	qaws_scalar axis_u[3];
+	qaws_scalar axis_v[3];
+	/* For elliptical: second radius */
+	qaws_scalar radius_b;
+	int use_arc;
+} qaws_yuksel_subcurve;
+
+typedef struct qaws_yuksel_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+	int closed;
+	int mode;
+	qaws_yuksel_subcurve* subcurves;
+} qaws_yuksel_impl;
+
 #endif /* QAWS_INTERNAL_TYPES_H */
