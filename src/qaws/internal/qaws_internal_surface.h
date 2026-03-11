@@ -1,0 +1,84 @@
+#ifndef QAWS_INTERNAL_SURFACE_H
+#define QAWS_INTERNAL_SURFACE_H
+
+#include "../qaws_surface_types.h"
+
+typedef struct qaws_surface_vtable qaws_surface_vtable;
+
+struct qaws_surface
+{
+	qaws_surface_kind kind;
+	unsigned int u_degree;
+	unsigned int v_degree;
+	qaws_range u_range;
+	qaws_range v_range;
+	qaws_surface_vtable const* vtable;
+	void* impl;
+};
+
+struct qaws_surface_vtable
+{
+	qaws_status (*eval_3d)(
+		qaws_surface const* surface,
+		qaws_scalar u,
+		qaws_scalar v,
+		unsigned int eval_flags,
+		qaws_surface_eval_result* out_result);
+
+	void (*destroy_impl)(void* impl);
+
+	int (*is_rational)(qaws_surface const* surface);
+};
+
+/* Bezier surface impl */
+typedef struct qaws_surface_bezier_impl
+{
+	qaws_scalar* control_points;  /* 3 scalars per point, row-major */
+	unsigned int u_count;
+	unsigned int v_count;
+} qaws_surface_bezier_impl;
+
+/* B-spline surface impl */
+typedef struct qaws_surface_bspline_impl
+{
+	qaws_scalar* control_points;
+	unsigned int u_count;
+	unsigned int v_count;
+	qaws_scalar* u_knots;
+	unsigned int u_knot_count;
+	qaws_scalar* v_knots;
+	unsigned int v_knot_count;
+} qaws_surface_bspline_impl;
+
+/* NURBS surface impl */
+typedef struct qaws_surface_nurbs_impl
+{
+	qaws_scalar* control_points;
+	unsigned int u_count;
+	unsigned int v_count;
+	qaws_scalar* weights;
+	qaws_scalar* u_knots;
+	unsigned int u_knot_count;
+	qaws_scalar* v_knots;
+	unsigned int v_knot_count;
+} qaws_surface_nurbs_impl;
+
+qaws_surface* qaws_internal_surface_alloc(
+	qaws_surface_kind kind,
+	unsigned int u_degree,
+	unsigned int v_degree,
+	qaws_range u_range,
+	qaws_range v_range,
+	qaws_surface_vtable const* vtable);
+
+void qaws_internal_surface_free(qaws_surface* surface);
+
+/* Generate uniform clamped knot vector into out_knots.
+   knot_count = num_cp + degree + 1. Returns knot_count. */
+unsigned int qaws_internal_surface_uniform_knots(
+	unsigned int degree,
+	unsigned int num_cp,
+	qaws_scalar* out_knots,
+	unsigned int capacity);
+
+#endif /* QAWS_INTERNAL_SURFACE_H */

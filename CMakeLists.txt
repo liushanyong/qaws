@@ -61,12 +61,19 @@ set(QAWS_SOURCES
   src/qaws/qaws_polynomial.c
   src/qaws/qaws_clothoid.c
   src/qaws/qaws_subdivision.c
+  src/qaws/qaws_surface.c
+  src/qaws/qaws_surface_bezier.c
+  src/qaws/qaws_surface_bspline.c
+  src/qaws/qaws_surface_nurbs.c
+  src/qaws/qaws_surface_swept.c
+  src/qaws/qaws_surface_ruled.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
   src/qaws/internal/qaws_internal_arc_length.c
   src/qaws/internal/qaws_internal_solver.c
   src/qaws/internal/qaws_internal_validation.c
+  src/qaws/internal/qaws_internal_surface.c
 )
 
 add_library(qaws ${QAWS_SOURCES})
@@ -182,6 +189,13 @@ if(QAWS_INSTALL)
       src/qaws/qaws_operations.h
       src/qaws/qaws_convert.h
       src/qaws/qaws_export.h
+      src/qaws/qaws_surface.h
+      src/qaws/qaws_surface_types.h
+      src/qaws/qaws_surface_bezier.h
+      src/qaws/qaws_surface_bspline.h
+      src/qaws/qaws_surface_nurbs.h
+      src/qaws/qaws_surface_swept.h
+      src/qaws/qaws_surface_ruled.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 

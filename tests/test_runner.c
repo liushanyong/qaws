@@ -13,6 +13,11 @@
 #endif
 
 #define SVG_OUTPUT_DIR "tests_output"
+#define OBJ_OUTPUT_DIR "tests_output"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #define SVG_SAMPLES 256
 
 static int g_pass = 0;
@@ -11379,6 +11384,2346 @@ static void test_svg_all_new_families(void)
 	printf("  -> " SVG_OUTPUT_DIR "/all_new_families.svg\n");
 }
 
+/* ================================================================== */
+/* OBJ writer helpers for 3D visualization                             */
+/* ================================================================== */
+
+typedef struct obj_writer
+{
+	FILE* fp;
+	FILE* mtl_fp;
+	unsigned int vertex_count;   /* running total, OBJ is 1-indexed */
+	unsigned int normal_count;
+	char mtl_name[256];
+} obj_writer;
+
+static int obj_open(obj_writer* w, char const* obj_path, char const* mtl_path)
+{
+	w->fp = fopen(obj_path, "w");
+	if (!w->fp) return 0;
+	w->mtl_fp = NULL;
+	w->vertex_count = 0;
+	w->normal_count = 0;
+	if (mtl_path)
+	{
+		char const* slash;
+		char const* bslash;
+		char const* last;
+		w->mtl_fp = fopen(mtl_path, "w");
+		if (!w->mtl_fp) { fclose(w->fp); return 0; }
+		/* Write mtllib with just the filename */
+		slash = strrchr(mtl_path, '/');
+		bslash = strrchr(mtl_path, '\\');
+		last = slash > bslash ? slash : bslash;
+		if (last) last++; else last = mtl_path;
+		strncpy(w->mtl_name, last, sizeof(w->mtl_name) - 1);
+		w->mtl_name[sizeof(w->mtl_name) - 1] = '\0';
+		fprintf(w->fp, "mtllib %s\n", w->mtl_name);
+	}
+	fprintf(w->fp, "# Qaws 3D test output\n\n");
+	return 1;
+}
+
+static void obj_close(obj_writer* w)
+{
+	if (w->fp) { fclose(w->fp); w->fp = NULL; }
+	if (w->mtl_fp) { fclose(w->mtl_fp); w->mtl_fp = NULL; }
+}
+
+static void obj_material(obj_writer* w, char const* name,
+	double r, double g, double b)
+{
+	if (!w->mtl_fp) return;
+	fprintf(w->mtl_fp,
+		"newmtl %s\n"
+		"Ka %.3f %.3f %.3f\n"
+		"Kd %.3f %.3f %.3f\n"
+		"Ks 0.3 0.3 0.3\n"
+		"Ns 50.0\n"
+		"d 1.0\n\n",
+		name, r * 0.2, g * 0.2, b * 0.2, r, g, b);
+}
+
+static void obj_group(obj_writer* w, char const* name)
+{
+	fprintf(w->fp, "\ng %s\n", name);
+}
+
+static void obj_use_material(obj_writer* w, char const* name)
+{
+	fprintf(w->fp, "usemtl %s\n", name);
+}
+
+static void obj_comment(obj_writer* w, char const* text)
+{
+	fprintf(w->fp, "# %s\n", text);
+}
+
+/* Write a single vertex, return its 1-based index */
+static unsigned int obj_vertex(obj_writer* w, qaws_vec3 p)
+{
+	fprintf(w->fp, "v %.6f %.6f %.6f\n", (double)p.x, (double)p.y, (double)p.z);
+	return ++w->vertex_count;
+}
+
+/* Write a vertex normal, return its 1-based index */
+static unsigned int obj_normal(obj_writer* w, qaws_vec3 n)
+{
+	fprintf(w->fp, "vn %.6f %.6f %.6f\n", (double)n.x, (double)n.y, (double)n.z);
+	return ++w->normal_count;
+}
+
+/* Sample a 3D curve and write as polyline. Returns first vertex index. */
+static unsigned int obj_curve_polyline(obj_writer* w, qaws_curve const* curve,
+	unsigned int sample_count)
+{
+	unsigned int first_vi, count, ci;
+	qaws_vec3 buf[512];
+	qaws_sampling_desc sd;
+
+	if (sample_count > 512) sample_count = 512;
+	memset(&sd, 0, sizeof(sd));
+	sd.traversal_mode = QAWS_TRAVERSAL_MODE_PARAMETER;
+	sd.sample_count = sample_count;
+	count = 0;
+	qaws_curve_sample_3d(curve, &sd, buf, 512, &count);
+	if (count < 2) return 0;
+
+	first_vi = w->vertex_count + 1;
+	for (ci = 0; ci < count; ci++)
+		obj_vertex(w, buf[ci]);
+
+	/* Write line strip */
+	fprintf(w->fp, "l");
+	for (ci = 0; ci < count; ci++)
+		fprintf(w->fp, " %u", first_vi + ci);
+	fprintf(w->fp, "\n");
+	return first_vi;
+}
+
+/* Write a UV sphere at a point (8 longitude x 6 latitude segments) */
+static void obj_sphere(obj_writer* w, qaws_vec3 center, qaws_scalar radius)
+{
+	unsigned int slices = 8, stacks = 6;
+	unsigned int first_vi = w->vertex_count + 1;
+	unsigned int si, ti;
+	qaws_vec3 v;
+
+	/* Top pole */
+	v.x = center.x; v.y = center.y + radius; v.z = center.z;
+	obj_vertex(w, v);
+	/* Body vertices: (stacks-1) rings of (slices) vertices */
+	for (ti = 1; ti < stacks; ti++)
+	{
+		double phi = M_PI * (double)ti / (double)stacks;
+		double sp = sin(phi), cp = cos(phi);
+		for (si = 0; si < slices; si++)
+		{
+			double theta = 2.0 * M_PI * (double)si / (double)slices;
+			v.x = center.x + radius * (qaws_scalar)(sp * cos(theta));
+			v.y = center.y + radius * (qaws_scalar)(cp);
+			v.z = center.z + radius * (qaws_scalar)(sp * sin(theta));
+			obj_vertex(w, v);
+		}
+	}
+	/* Bottom pole */
+	v.x = center.x; v.y = center.y - radius; v.z = center.z;
+	obj_vertex(w, v);
+
+	/* Top cap: triangles from pole to first ring */
+	for (si = 0; si < slices; si++)
+	{
+		unsigned int next = (si + 1) % slices;
+		fprintf(w->fp, "f %u %u %u\n",
+			first_vi, first_vi + 1 + si, first_vi + 1 + next);
+	}
+	/* Body: quad strips between adjacent rings */
+	for (ti = 0; ti < stacks - 2; ti++)
+	{
+		unsigned int ring0 = first_vi + 1 + ti * slices;
+		unsigned int ring1 = first_vi + 1 + (ti + 1) * slices;
+		for (si = 0; si < slices; si++)
+		{
+			unsigned int next = (si + 1) % slices;
+			fprintf(w->fp, "f %u %u %u %u\n",
+				ring0 + si, ring0 + next, ring1 + next, ring1 + si);
+		}
+	}
+	/* Bottom cap: triangles from last ring to bottom pole */
+	{
+		unsigned int last_ring = first_vi + 1 + (stacks - 2) * slices;
+		unsigned int bot_pole = first_vi + 1 + (stacks - 1) * slices;
+		for (si = 0; si < slices; si++)
+		{
+			unsigned int next = (si + 1) % slices;
+			fprintf(w->fp, "f %u %u %u\n",
+				last_ring + si, bot_pole, last_ring + next);
+		}
+	}
+}
+
+/* Backward-compatible alias */
+static void obj_marker(obj_writer* w, qaws_vec3 center, qaws_scalar size)
+{
+	obj_sphere(w, center, size);
+}
+
+/* Write a line segment between two points */
+static void obj_line_segment(obj_writer* w, qaws_vec3 a, qaws_vec3 b)
+{
+	unsigned int va = obj_vertex(w, a);
+	unsigned int vb = obj_vertex(w, b);
+	fprintf(w->fp, "l %u %u\n", va, vb);
+}
+
+/* Write a Frenet frame as 3 line segments: T(red-ish), N(green-ish), B(blue-ish) */
+static void obj_frenet_frame(obj_writer* w, qaws_vec3 pos,
+	qaws_vec3 T, qaws_vec3 N, qaws_vec3 B, qaws_scalar length)
+{
+	qaws_vec3 tip;
+	tip.x = pos.x + T.x * length;
+	tip.y = pos.y + T.y * length;
+	tip.z = pos.z + T.z * length;
+	obj_line_segment(w, pos, tip);
+
+	tip.x = pos.x + N.x * length;
+	tip.y = pos.y + N.y * length;
+	tip.z = pos.z + N.z * length;
+	obj_line_segment(w, pos, tip);
+
+	tip.x = pos.x + B.x * length;
+	tip.y = pos.y + B.y * length;
+	tip.z = pos.z + B.z * length;
+	obj_line_segment(w, pos, tip);
+}
+
+/* Helper: normalize a vec3 in-place, return length */
+static double v3_normalize(qaws_vec3* v)
+{
+	double len = sqrt((double)(v->x*v->x + v->y*v->y + v->z*v->z));
+	if (len > 1e-12) { v->x /= (qaws_scalar)len; v->y /= (qaws_scalar)len; v->z /= (qaws_scalar)len; }
+	return len;
+}
+
+static double v3_dot(qaws_vec3 a, qaws_vec3 b)
+{
+	return (double)a.x*(double)b.x + (double)a.y*(double)b.y + (double)a.z*(double)b.z;
+}
+
+static qaws_vec3 v3_cross(qaws_vec3 a, qaws_vec3 b)
+{
+	qaws_vec3 r;
+	r.x = a.y*b.z - a.z*b.y;
+	r.y = a.z*b.x - a.x*b.z;
+	r.z = a.x*b.y - a.y*b.x;
+	return r;
+}
+
+/* Rotate vector v around axis by angle (Rodrigues' formula) */
+static qaws_vec3 v3_rotate(qaws_vec3 v, qaws_vec3 axis, double cos_a, double sin_a)
+{
+	/* v*cos + (axis x v)*sin + axis*(axis.v)*(1-cos) */
+	double adv = v3_dot(axis, v);
+	qaws_vec3 axv = v3_cross(axis, v);
+	qaws_vec3 r;
+	r.x = (qaws_scalar)((double)v.x * cos_a + (double)axv.x * sin_a + (double)axis.x * adv * (1.0 - cos_a));
+	r.y = (qaws_scalar)((double)v.y * cos_a + (double)axv.y * sin_a + (double)axis.y * adv * (1.0 - cos_a));
+	r.z = (qaws_scalar)((double)v.z * cos_a + (double)axv.z * sin_a + (double)axis.z * adv * (1.0 - cos_a));
+	return r;
+}
+
+/* Build an initial perpendicular frame for a tangent vector */
+static void build_initial_frame(qaws_vec3 T_vec, qaws_vec3* N_out, qaws_vec3* B_out)
+{
+	qaws_vec3 up = { 0, 1, 0 };
+	*N_out = v3_cross(up, T_vec);
+	if (v3_normalize(N_out) < 1e-8)
+	{
+		up.x = 1; up.y = 0; up.z = 0;
+		*N_out = v3_cross(up, T_vec);
+		v3_normalize(N_out);
+	}
+	*B_out = v3_cross(T_vec, *N_out);
+	v3_normalize(B_out);
+}
+
+/* Generate a tube mesh along a 3D curve using parallel transport frame
+   (Bishop frame) to avoid Frenet flipping artifacts */
+static void obj_tube(obj_writer* w, qaws_curve const* curve,
+	unsigned int length_segments, unsigned int circle_segments,
+	qaws_scalar radius)
+{
+	unsigned int si, ci;
+	unsigned int first_vi = w->vertex_count + 1;
+	unsigned int first_ni = w->normal_count + 1;
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	qaws_scalar t_min = range.min_value;
+	qaws_scalar t_len = range.max_value - range.min_value;
+	qaws_vec3 prev_T = {0,0,0}, prev_N = {0,0,0}, prev_B = {0,0,0};
+	int frame_initialized = 0;
+	unsigned int rings_emitted = 0;
+
+	for (si = 0; si <= length_segments; si++)
+	{
+		qaws_scalar t = t_min + t_len * (qaws_scalar)si / (qaws_scalar)length_segments;
+		qaws_vec3 T_vec, N_vec, B_vec;
+		qaws_eval_result_3d r;
+
+		if (qaws_curve_evaluate_3d(curve, t, QAWS_EVAL_FLAG_POSITION, &r) != QAWS_STATUS_OK)
+			continue;
+		if (qaws_curve_compute_tangent_3d(curve, t, &T_vec) != QAWS_STATUS_OK)
+			continue;
+		v3_normalize(&T_vec);
+
+		/* Ensure consistent tangent direction: if tangent flips vs previous,
+		   negate it. This handles span boundary discontinuities. */
+		if (frame_initialized && v3_dot(prev_T, T_vec) < 0.0)
+		{
+			T_vec.x = -T_vec.x;
+			T_vec.y = -T_vec.y;
+			T_vec.z = -T_vec.z;
+		}
+
+		if (!frame_initialized)
+		{
+			/* First point: build arbitrary perpendicular frame */
+			build_initial_frame(T_vec, &N_vec, &B_vec);
+			frame_initialized = 1;
+		}
+		else
+		{
+			/* Parallel transport: rotate previous N,B to align with new tangent.
+			   Rotation axis = prev_T x new_T, angle = acos(prev_T . new_T) */
+			double d = v3_dot(prev_T, T_vec);
+			if (d > 1.0) d = 1.0;
+			if (d < -1.0) d = -1.0;
+
+			if (d > 0.9999999)
+			{
+				/* Nearly parallel: keep previous frame */
+				N_vec = prev_N;
+				B_vec = prev_B;
+			}
+			else
+			{
+				qaws_vec3 rot_axis = v3_cross(prev_T, T_vec);
+				double sin_a, cos_a;
+				v3_normalize(&rot_axis);
+				cos_a = d;
+				sin_a = sqrt(1.0 - d * d);
+				N_vec = v3_rotate(prev_N, rot_axis, cos_a, sin_a);
+				B_vec = v3_rotate(prev_B, rot_axis, cos_a, sin_a);
+				v3_normalize(&N_vec);
+				v3_normalize(&B_vec);
+			}
+		}
+
+		prev_T = T_vec;
+		prev_N = N_vec;
+		prev_B = B_vec;
+
+		for (ci = 0; ci < circle_segments; ci++)
+		{
+			double angle = 2.0 * M_PI * (double)ci / (double)circle_segments;
+			double ca = cos(angle), sa = sin(angle);
+			qaws_vec3 pos, nrm;
+			pos.x = r.position.x + radius * (qaws_scalar)(ca * (double)N_vec.x + sa * (double)B_vec.x);
+			pos.y = r.position.y + radius * (qaws_scalar)(ca * (double)N_vec.y + sa * (double)B_vec.y);
+			pos.z = r.position.z + radius * (qaws_scalar)(ca * (double)N_vec.z + sa * (double)B_vec.z);
+			nrm.x = (qaws_scalar)(ca * (double)N_vec.x + sa * (double)B_vec.x);
+			nrm.y = (qaws_scalar)(ca * (double)N_vec.y + sa * (double)B_vec.y);
+			nrm.z = (qaws_scalar)(ca * (double)N_vec.z + sa * (double)B_vec.z);
+			obj_vertex(w, pos);
+			obj_normal(w, nrm);
+		}
+		rings_emitted++;
+	}
+
+	/* Generate quad faces connecting adjacent rings */
+	if (rings_emitted > 1)
+	{
+		for (si = 0; si < rings_emitted - 1; si++)
+		{
+			for (ci = 0; ci < circle_segments; ci++)
+			{
+				unsigned int ci_next = (ci + 1) % circle_segments;
+				unsigned int v00 = first_vi + si * circle_segments + ci;
+				unsigned int v01 = first_vi + si * circle_segments + ci_next;
+				unsigned int v10 = first_vi + (si + 1) * circle_segments + ci;
+				unsigned int v11 = first_vi + (si + 1) * circle_segments + ci_next;
+				unsigned int n00 = first_ni + si * circle_segments + ci;
+				unsigned int n01 = first_ni + si * circle_segments + ci_next;
+				unsigned int n10 = first_ni + (si + 1) * circle_segments + ci;
+				unsigned int n11 = first_ni + (si + 1) * circle_segments + ci_next;
+				fprintf(w->fp, "f %u//%u %u//%u %u//%u %u//%u\n",
+					v00, n00, v01, n01, v11, n11, v10, n10);
+			}
+		}
+	}
+}
+
+/* Write a curvature comb for a 3D curve as lines from curve to comb tips */
+static void obj_curvature_comb(obj_writer* w, qaws_curve const* curve,
+	unsigned int sample_count, qaws_scalar scale)
+{
+	qaws_curvature_sample_3d samples[256];
+	unsigned int ci;
+	if (sample_count > 256) sample_count = 256;
+	if (qaws_curve_compute_curvature_comb_3d(curve, sample_count, samples, 256)
+		!= QAWS_STATUS_OK)
+		return;
+	for (ci = 0; ci < sample_count; ci++)
+	{
+		qaws_vec3 tip;
+		tip.x = samples[ci].position.x + samples[ci].normal.x * samples[ci].curvature * scale;
+		tip.y = samples[ci].position.y + samples[ci].normal.y * samples[ci].curvature * scale;
+		tip.z = samples[ci].position.z + samples[ci].normal.z * samples[ci].curvature * scale;
+		obj_line_segment(w, samples[ci].position, tip);
+	}
+}
+
+/* ================================================================== */
+/* OBJ 3D visual tests                                                 */
+/* ================================================================== */
+
+static void test_obj_helix(void)
+{
+	/* Hermite helix: spirals upward in 3D */
+	obj_writer w;
+	unsigned int fi;
+
+	printf("test_obj_helix\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/helix.obj",
+		OBJ_OUTPUT_DIR "/helix.mtl"))
+		return;
+
+	obj_material(&w, "curve_line", 1.0, 0.9, 0.3);
+	obj_material(&w, "tube", 0.2, 0.6, 1.0);
+	obj_material(&w, "frame_t", 1.0, 0.2, 0.2);
+	obj_material(&w, "frame_n", 0.2, 1.0, 0.2);
+	obj_material(&w, "frame_b", 0.2, 0.2, 1.0);
+	obj_material(&w, "control_pts", 1.0, 0.4, 0.7);
+
+	{
+		/* Build a helix from Hermite segments: 8 points going up while rotating */
+		unsigned int num_pts = 9;
+		qaws_scalar pts[27];  /* 9 * 3 */
+		qaws_scalar der[27];  /* 9 * 3 */
+		qaws_hermite_desc desc;
+		qaws_curve* curve = NULL;
+		unsigned int pi;
+		qaws_range range;
+
+		for (pi = 0; pi < num_pts; pi++)
+		{
+			double angle = 2.0 * M_PI * (double)pi / 4.0;  /* 2.25 full turns */
+			double r_val = 2.0;
+			pts[pi * 3 + 0] = (qaws_scalar)(r_val * cos(angle));
+			pts[pi * 3 + 1] = (qaws_scalar)((double)pi * 0.5);
+			pts[pi * 3 + 2] = (qaws_scalar)(r_val * sin(angle));
+			/* Derivative: tangent to helix */
+			der[pi * 3 + 0] = (qaws_scalar)(-r_val * sin(angle) * 1.5);
+			der[pi * 3 + 1] = (qaws_scalar)0.5;
+			der[pi * 3 + 2] = (qaws_scalar)(r_val * cos(angle) * 1.5);
+		}
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.points = pts;
+		desc.derivatives = der;
+		desc.point_count = num_pts;
+		desc.derivative_count = num_pts;
+
+		if (qaws_curve_create_hermite(&desc, &curve) == QAWS_STATUS_OK)
+		{
+			/* Tube mesh */
+			obj_group(&w, "helix_tube");
+			obj_use_material(&w, "tube");
+			obj_tube(&w, curve, 128, 12, (qaws_scalar)0.08);
+
+			/* Wireframe polyline */
+			obj_group(&w, "helix_wire");
+			obj_use_material(&w, "curve_line");
+			obj_curve_polyline(&w, curve, 256);
+
+			/* Frenet frames every 45 degrees */
+			obj_comment(&w, "Frenet frames along helix");
+			range = qaws_curve_get_parameter_range(curve);
+			for (fi = 0; fi < 16; fi++)
+			{
+				qaws_scalar t = range.min_value + (range.max_value - range.min_value)
+					* (qaws_scalar)fi / (qaws_scalar)15;
+				qaws_vec3 T_vec, N_vec, B_vec;
+				qaws_eval_result_3d r;
+				if (qaws_curve_evaluate_3d(curve, t, QAWS_EVAL_FLAG_POSITION, &r)
+					== QAWS_STATUS_OK &&
+					qaws_curve_compute_frenet_frame_3d(curve, t, &T_vec, &N_vec, &B_vec)
+					== QAWS_STATUS_OK)
+				{
+					char grp[64];
+					sprintf(grp, "frame_%02u_T", fi);
+					obj_group(&w, grp);
+					obj_use_material(&w, "frame_t");
+					{
+						qaws_vec3 tip;
+						tip.x = r.position.x + T_vec.x * (qaws_scalar)0.4;
+						tip.y = r.position.y + T_vec.y * (qaws_scalar)0.4;
+						tip.z = r.position.z + T_vec.z * (qaws_scalar)0.4;
+						obj_line_segment(&w, r.position, tip);
+					}
+					sprintf(grp, "frame_%02u_N", fi);
+					obj_group(&w, grp);
+					obj_use_material(&w, "frame_n");
+					{
+						qaws_vec3 tip;
+						tip.x = r.position.x + N_vec.x * (qaws_scalar)0.4;
+						tip.y = r.position.y + N_vec.y * (qaws_scalar)0.4;
+						tip.z = r.position.z + N_vec.z * (qaws_scalar)0.4;
+						obj_line_segment(&w, r.position, tip);
+					}
+					sprintf(grp, "frame_%02u_B", fi);
+					obj_group(&w, grp);
+					obj_use_material(&w, "frame_b");
+					{
+						qaws_vec3 tip;
+						tip.x = r.position.x + B_vec.x * (qaws_scalar)0.4;
+						tip.y = r.position.y + B_vec.y * (qaws_scalar)0.4;
+						tip.z = r.position.z + B_vec.z * (qaws_scalar)0.4;
+						obj_line_segment(&w, r.position, tip);
+					}
+				}
+			}
+
+			/* Control points as markers */
+			obj_group(&w, "control_points");
+			obj_use_material(&w, "control_pts");
+			for (pi = 0; pi < num_pts; pi++)
+			{
+				qaws_vec3 cp;
+				cp.x = pts[pi * 3 + 0];
+				cp.y = pts[pi * 3 + 1];
+				cp.z = pts[pi * 3 + 2];
+				obj_marker(&w, cp, (qaws_scalar)0.06);
+			}
+
+			qaws_curve_destroy(curve);
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/helix.obj\n");
+}
+
+static void test_obj_trefoil_knot(void)
+{
+	/* Trefoil knot: (sin t + 2 sin 2t, cos t - 2 cos 2t, -sin 3t) */
+	obj_writer w;
+	unsigned int pi;
+
+	printf("test_obj_trefoil_knot\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/trefoil_knot.obj",
+		OBJ_OUTPUT_DIR "/trefoil_knot.mtl"))
+		return;
+
+	obj_material(&w, "knot_tube", 0.9, 0.3, 0.5);
+	obj_material(&w, "knot_wire", 1.0, 1.0, 0.3);
+	obj_material(&w, "comb", 0.3, 1.0, 0.6);
+	obj_material(&w, "frame_t", 1.0, 0.2, 0.2);
+	obj_material(&w, "frame_n", 0.2, 1.0, 0.2);
+	obj_material(&w, "frame_b", 0.2, 0.2, 1.0);
+
+	{
+		/* Build trefoil from Hermite: sample the parametric equation */
+		unsigned int num_pts = 25;  /* closed: first == last */
+		qaws_scalar pts[75];  /* 25 * 3 */
+		qaws_scalar der[75];
+		qaws_hermite_desc desc;
+		qaws_curve* curve = NULL;
+		/* Scale derivatives from analytical param [0,2pi] to Hermite param [0,num_pts-1] */
+		double dt_scale = 2.0 * M_PI / (double)(num_pts - 1);
+
+		for (pi = 0; pi < num_pts; pi++)
+		{
+			double t = 2.0 * M_PI * (double)pi / (double)(num_pts - 1);
+			pts[pi * 3 + 0] = (qaws_scalar)(sin(t) + 2.0 * sin(2.0 * t));
+			pts[pi * 3 + 1] = (qaws_scalar)(cos(t) - 2.0 * cos(2.0 * t));
+			pts[pi * 3 + 2] = (qaws_scalar)(-sin(3.0 * t));
+			/* Derivatives scaled to Hermite parameterization */
+			der[pi * 3 + 0] = (qaws_scalar)((cos(t) + 4.0 * cos(2.0 * t)) * dt_scale);
+			der[pi * 3 + 1] = (qaws_scalar)((-sin(t) + 4.0 * sin(2.0 * t)) * dt_scale);
+			der[pi * 3 + 2] = (qaws_scalar)((-3.0 * cos(3.0 * t)) * dt_scale);
+		}
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.points = pts;
+		desc.derivatives = der;
+		desc.point_count = num_pts;
+		desc.derivative_count = num_pts;
+
+		if (qaws_curve_create_hermite(&desc, &curve) == QAWS_STATUS_OK)
+		{
+			qaws_range range = qaws_curve_get_parameter_range(curve);
+			unsigned int fi;
+
+			/* Tube mesh */
+			obj_group(&w, "knot_tube");
+			obj_use_material(&w, "knot_tube");
+			obj_tube(&w, curve, 200, 16, (qaws_scalar)0.15);
+
+			/* Wireframe */
+			obj_group(&w, "knot_wire");
+			obj_use_material(&w, "knot_wire");
+			obj_curve_polyline(&w, curve, 400);
+
+			/* Curvature comb */
+			obj_group(&w, "curvature_comb");
+			obj_use_material(&w, "comb");
+			obj_curvature_comb(&w, curve, 80, (qaws_scalar)0.5);
+
+			/* Frenet frames at 8 positions */
+			for (fi = 0; fi < 8; fi++)
+			{
+				qaws_scalar t = range.min_value + (range.max_value - range.min_value)
+					* (qaws_scalar)fi / (qaws_scalar)8;
+				qaws_vec3 T_vec, N_vec, B_vec;
+				qaws_eval_result_3d r;
+				if (qaws_curve_evaluate_3d(curve, t, QAWS_EVAL_FLAG_POSITION, &r)
+					== QAWS_STATUS_OK &&
+					qaws_curve_compute_frenet_frame_3d(curve, t, &T_vec, &N_vec, &B_vec)
+					== QAWS_STATUS_OK)
+				{
+					char grp[64];
+					sprintf(grp, "frame_%u_T", fi);
+					obj_group(&w, grp); obj_use_material(&w, "frame_t");
+					{ qaws_vec3 tip = { r.position.x + T_vec.x * 0.6f,
+						r.position.y + T_vec.y * 0.6f,
+						r.position.z + T_vec.z * 0.6f };
+					obj_line_segment(&w, r.position, tip); }
+					sprintf(grp, "frame_%u_N", fi);
+					obj_group(&w, grp); obj_use_material(&w, "frame_n");
+					{ qaws_vec3 tip = { r.position.x + N_vec.x * 0.6f,
+						r.position.y + N_vec.y * 0.6f,
+						r.position.z + N_vec.z * 0.6f };
+					obj_line_segment(&w, r.position, tip); }
+					sprintf(grp, "frame_%u_B", fi);
+					obj_group(&w, grp); obj_use_material(&w, "frame_b");
+					{ qaws_vec3 tip = { r.position.x + B_vec.x * 0.6f,
+						r.position.y + B_vec.y * 0.6f,
+						r.position.z + B_vec.z * 0.6f };
+					obj_line_segment(&w, r.position, tip); }
+				}
+			}
+
+			qaws_curve_destroy(curve);
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/trefoil_knot.obj\n");
+}
+
+static void test_obj_3d_intersection(void)
+{
+	/* Two 3D curves that intersect, with intersection points marked */
+	obj_writer w;
+
+	printf("test_obj_3d_intersection\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/intersection_3d.obj",
+		OBJ_OUTPUT_DIR "/intersection_3d.mtl"))
+		return;
+
+	obj_material(&w, "tube_a", 0.15, 0.5, 0.8);
+	obj_material(&w, "tube_b", 0.8, 0.4, 0.15);
+	obj_material(&w, "tube_c", 0.2, 0.7, 0.3);
+	obj_material(&w, "tube_d", 0.7, 0.2, 0.7);
+	obj_material(&w, "isect_pt", 1.0, 0.1, 0.1);
+	obj_material(&w, "self_isect_pt", 1.0, 0.9, 0.1);
+
+	/* --- Example 1: Self-intersecting 3D figure-8 Hermite curve --- */
+	{
+		/* A figure-8 that lies mostly in XY but dips in Z at the crossing */
+		qaws_scalar h_pts[] = {
+			0, 0, 0,   2, 2, 1,   0, 0, 0,   -2, 2, -1,   0, 0, 0
+		};
+		qaws_scalar h_der[] = {
+			2, 2, 1,   0, -2, 0,   -2, -2, -1,   0, 2, 0,   2, 2, 1
+		};
+		qaws_hermite_desc hd;
+		qaws_curve* crv = NULL;
+
+		memset(&hd, 0, sizeof(hd));
+		hd.dimension = QAWS_DIMENSION_3D;
+		hd.degree = 3;
+		hd.points = h_pts;
+		hd.derivatives = h_der;
+		hd.point_count = 5;
+		hd.derivative_count = 5;
+
+		if (qaws_curve_create_hermite(&hd, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_intersection_3d isects[32];
+			unsigned int ic = 0, ii;
+
+			obj_comment(&w, "Example 1: Self-intersecting 3D figure-8");
+			obj_group(&w, "ex1_tube");
+			obj_use_material(&w, "tube_a");
+			obj_tube(&w, crv, 100, 10, (qaws_scalar)0.05);
+
+			if (qaws_curve_find_self_intersections_3d(crv, isects, 32, &ic)
+				== QAWS_STATUS_OK && ic > 0)
+			{
+				obj_group(&w, "ex1_self_isect");
+				obj_use_material(&w, "self_isect_pt");
+				for (ii = 0; ii < ic; ii++)
+					obj_sphere(&w, isects[ii].position, (qaws_scalar)0.15);
+			}
+			{ char buf[64]; sprintf(buf, "Self-intersection: %u point(s)", ic); obj_comment(&w, buf); }
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* --- Example 2: Two Bezier curves sharing a point at (0,2,0) --- */
+	{
+		/* Curve A: from (-3,0,0) through (0,2,0) at t=0.5 to (3,0,0)
+		   For a cubic Bezier, C(0.5) = (P0+3P1+3P2+P3)/8.
+		   We want C(0.5) = (0,2,0). Choose symmetric CPs:
+		   P0=(-3,0,0), P1=(-1,4,0), P2=(1,4,0), P3=(3,0,0)
+		   => C(0.5)=(-3+3*(-1)+3*1+3)/8 = 0, (0+12+12+0)/8 = 3 ... not 2.
+		   Just pick two Hermite segments that both interpolate (0,2,0). */
+		qaws_scalar pa[] = { -3,0,0,  0,2,0,  3,0,0 };
+		qaws_scalar da_d[] = { 2,2,0,  2,-2,0,  2,-2,0 };
+		qaws_hermite_desc hda;
+		qaws_curve* ca = NULL;
+
+		/* Curve B: from (0,0,-3) through (0,2,0) to (0,0,3) — perpendicular path */
+		qaws_scalar pb[] = { 0,0,-3,  0,2,0,  0,0,3 };
+		qaws_scalar db_d[] = { 0,2,2,  0,-2,2,  0,-2,2 };
+		qaws_hermite_desc hdb;
+		qaws_curve* cb = NULL;
+
+		memset(&hda, 0, sizeof(hda));
+		hda.dimension = QAWS_DIMENSION_3D; hda.degree = 3;
+		hda.points = pa; hda.derivatives = da_d;
+		hda.point_count = 3; hda.derivative_count = 3;
+		memset(&hdb, 0, sizeof(hdb));
+		hdb.dimension = QAWS_DIMENSION_3D; hdb.degree = 3;
+		hdb.points = pb; hdb.derivatives = db_d;
+		hdb.point_count = 3; hdb.derivative_count = 3;
+
+		if (qaws_curve_create_hermite(&hda, &ca) == QAWS_STATUS_OK &&
+			qaws_curve_create_hermite(&hdb, &cb) == QAWS_STATUS_OK)
+		{
+			qaws_intersection_3d isects[32];
+			unsigned int ic = 0, ii;
+
+			obj_comment(&w, "Example 2: Two Hermite arches crossing at (0,2,0)");
+			obj_group(&w, "ex2_arch_a");
+			obj_use_material(&w, "tube_a");
+			obj_tube(&w, ca, 80, 10, (qaws_scalar)0.05);
+			obj_group(&w, "ex2_arch_b");
+			obj_use_material(&w, "tube_b");
+			obj_tube(&w, cb, 80, 10, (qaws_scalar)0.05);
+
+			if (qaws_curve_find_intersections_3d(ca, cb, isects, 32, &ic)
+				== QAWS_STATUS_OK && ic > 0)
+			{
+				obj_group(&w, "ex2_isect");
+				obj_use_material(&w, "isect_pt");
+				for (ii = 0; ii < ic; ii++)
+					obj_sphere(&w, isects[ii].position, (qaws_scalar)0.15);
+			}
+			{ char buf[64]; sprintf(buf, "Arches crossing: %u point(s)", ic); obj_comment(&w, buf); }
+		}
+		if (ca) qaws_curve_destroy(ca);
+		if (cb) qaws_curve_destroy(cb);
+	}
+
+	/* --- Example 3: Hermite S-curve vs Catmull-Rom wave in 3D --- */
+	{
+		/* S-curve along X passing through (0,0,0) */
+		qaws_scalar s_pts[] = { -4,0,0, 0,0,0, 4,0,0 };
+		qaws_scalar s_der[] = { 2,3,2, 2,-3,-2, 2,3,2 };
+		qaws_hermite_desc sd;
+		qaws_curve* sc = NULL;
+
+		/* Catmull-Rom wave perpendicular, crossing S-curve */
+		qaws_vec3 cr_pts[] = { {0,-4,-2}, {0,-1,1}, {0,1,-1}, {0,4,2} };
+		qaws_catmull_rom_desc cd;
+		qaws_curve* cc = NULL;
+
+		memset(&sd, 0, sizeof(sd));
+		sd.dimension = QAWS_DIMENSION_3D; sd.degree = 3;
+		sd.points = s_pts; sd.derivatives = s_der;
+		sd.point_count = 3; sd.derivative_count = 3;
+
+		memset(&cd, 0, sizeof(cd));
+		cd.dimension = QAWS_DIMENSION_3D;
+		cd.control_points = cr_pts; cd.control_point_count = 4;
+		cd.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+		cd.closed = 0;
+
+		if (qaws_curve_create_hermite(&sd, &sc) == QAWS_STATUS_OK &&
+			qaws_curve_create_catmull_rom(&cd, &cc) == QAWS_STATUS_OK)
+		{
+			qaws_intersection_3d isects[32];
+			unsigned int ic = 0, ii;
+
+			obj_comment(&w, "Example 3: Hermite S-curve vs Catmull-Rom wave");
+			obj_group(&w, "ex3_s_curve");
+			obj_use_material(&w, "tube_c");
+			obj_tube(&w, sc, 80, 10, (qaws_scalar)0.05);
+			obj_group(&w, "ex3_cr_wave");
+			obj_use_material(&w, "tube_d");
+			obj_tube(&w, cc, 80, 10, (qaws_scalar)0.05);
+
+			if (qaws_curve_find_intersections_3d(sc, cc, isects, 32, &ic)
+				== QAWS_STATUS_OK && ic > 0)
+			{
+				obj_group(&w, "ex3_isect");
+				obj_use_material(&w, "isect_pt");
+				for (ii = 0; ii < ic; ii++)
+					obj_sphere(&w, isects[ii].position, (qaws_scalar)0.15);
+			}
+			{ char buf[64]; sprintf(buf, "S-curve vs CR wave: %u point(s)", ic); obj_comment(&w, buf); }
+		}
+		if (sc) qaws_curve_destroy(sc);
+		if (cc) qaws_curve_destroy(cc);
+	}
+
+	/* --- Example 4: Two Catmull-Rom splines sharing a point at (1,1,1) --- */
+	{
+		/* CR A: horizontal wave through (1,1,1) */
+		qaws_vec3 ca_pts[] = { {-3,1,1}, {-1,0,0}, {1,1,1}, {3,2,0}, {5,1,1} };
+		qaws_catmull_rom_desc cda;
+		qaws_curve* ca = NULL;
+
+		/* CR B: vertical wave through (1,1,1) */
+		qaws_vec3 cb_pts[] = { {1,-3,1}, {0,-1,0}, {1,1,1}, {2,3,2}, {1,5,1} };
+		qaws_catmull_rom_desc cdb;
+		qaws_curve* cb = NULL;
+
+		memset(&cda, 0, sizeof(cda));
+		cda.dimension = QAWS_DIMENSION_3D;
+		cda.control_points = ca_pts; cda.control_point_count = 5;
+		cda.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+		memset(&cdb, 0, sizeof(cdb));
+		cdb.dimension = QAWS_DIMENSION_3D;
+		cdb.control_points = cb_pts; cdb.control_point_count = 5;
+		cdb.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+
+		if (qaws_curve_create_catmull_rom(&cda, &ca) == QAWS_STATUS_OK &&
+			qaws_curve_create_catmull_rom(&cdb, &cb) == QAWS_STATUS_OK)
+		{
+			qaws_intersection_3d isects[32];
+			unsigned int ic = 0, ii;
+
+			obj_comment(&w, "Example 4: Two Catmull-Rom splines crossing at (1,1,1)");
+			obj_group(&w, "ex4_cr_a");
+			obj_use_material(&w, "tube_c");
+			obj_tube(&w, ca, 80, 10, (qaws_scalar)0.05);
+			obj_group(&w, "ex4_cr_b");
+			obj_use_material(&w, "tube_d");
+			obj_tube(&w, cb, 80, 10, (qaws_scalar)0.05);
+
+			if (qaws_curve_find_intersections_3d(ca, cb, isects, 32, &ic)
+				== QAWS_STATUS_OK && ic > 0)
+			{
+				obj_group(&w, "ex4_isect");
+				obj_use_material(&w, "isect_pt");
+				for (ii = 0; ii < ic; ii++)
+					obj_sphere(&w, isects[ii].position, (qaws_scalar)0.15);
+			}
+			{ char buf[64]; sprintf(buf, "Catmull-Roms crossing: %u point(s)", ic); obj_comment(&w, buf); }
+		}
+		if (ca) qaws_curve_destroy(ca);
+		if (cb) qaws_curve_destroy(cb);
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/intersection_3d.obj\n");
+}
+
+static void test_obj_3d_families(void)
+{
+	/* Multiple 3D curve families rendered together */
+	obj_writer w;
+
+	printf("test_obj_3d_families\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/families_3d.obj",
+		OBJ_OUTPUT_DIR "/families_3d.mtl"))
+		return;
+
+	obj_material(&w, "bezier", 0.9, 0.3, 0.4);
+	obj_material(&w, "bspline", 0.3, 0.9, 0.4);
+	obj_material(&w, "catmull", 0.3, 0.4, 0.9);
+	obj_material(&w, "nurbs", 0.9, 0.7, 0.2);
+	obj_material(&w, "hermite", 0.7, 0.2, 0.9);
+	obj_material(&w, "ctrl_pts", 0.5, 0.5, 0.5);
+
+	/* 1: Bezier - 3D S-curve offset in Z */
+	{
+		qaws_vec3 pts[] = { {0,0,0}, {1,3,1}, {3,-1,2}, {4,0,3} };
+		qaws_bezier_desc desc;
+		qaws_curve* crv = NULL;
+		unsigned int pi;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.control_points = pts;
+		desc.control_point_count = 4;
+		if (qaws_curve_create_bezier(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "bezier_tube");
+			obj_use_material(&w, "bezier");
+			obj_tube(&w, crv, 64, 8, (qaws_scalar)0.04);
+			obj_group(&w, "bezier_ctrl");
+			obj_use_material(&w, "ctrl_pts");
+			for (pi = 0; pi < 4; pi++)
+				obj_marker(&w, pts[pi], (qaws_scalar)0.05);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* 2: B-spline - wavy 3D path offset in X */
+	{
+		qaws_vec3 pts[] = { {5,0,0}, {6,2,1}, {7,-1,2}, {8,1,3}, {9,0,1} };
+		qaws_bspline_desc desc;
+		qaws_curve* crv = NULL;
+		unsigned int pi;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.control_points = pts;
+		desc.control_point_count = 5;
+		desc.knots = NULL;
+		desc.knot_count = 0;
+		desc.is_uniform = 1;
+		desc.is_closed = 0;
+		if (qaws_curve_create_bspline(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "bspline_tube");
+			obj_use_material(&w, "bspline");
+			obj_tube(&w, crv, 64, 8, (qaws_scalar)0.04);
+			obj_group(&w, "bspline_ctrl");
+			obj_use_material(&w, "ctrl_pts");
+			for (pi = 0; pi < 5; pi++)
+				obj_marker(&w, pts[pi], (qaws_scalar)0.05);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* 3: Catmull-Rom - interpolating path */
+	{
+		qaws_vec3 pts[] = { {0,0,4}, {1,2,5}, {3,0,6}, {4,1,5}, {5,-1,4} };
+		qaws_catmull_rom_desc desc;
+		qaws_curve* crv = NULL;
+		unsigned int pi;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.control_points = pts;
+		desc.control_point_count = 5;
+		desc.parameterization = QAWS_PARAMETERIZATION_CENTRIPETAL;
+		desc.closed = 0;
+		if (qaws_curve_create_catmull_rom(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "catmull_tube");
+			obj_use_material(&w, "catmull");
+			obj_tube(&w, crv, 64, 8, (qaws_scalar)0.04);
+			obj_group(&w, "catmull_ctrl");
+			obj_use_material(&w, "ctrl_pts");
+			for (pi = 0; pi < 5; pi++)
+				obj_marker(&w, pts[pi], (qaws_scalar)0.05);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* 4: NURBS - weighted 3D curve */
+	{
+		qaws_vec3 pts[] = { {0,0,8}, {1,3,9}, {3,3,9}, {4,0,8} };
+		qaws_scalar wts[] = { 1, 3, 3, 1 };
+		qaws_nurbs_desc desc;
+		qaws_curve* crv = NULL;
+		unsigned int pi;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.control_points = pts;
+		desc.control_point_count = 4;
+		desc.weights = wts;
+		desc.weight_count = 4;
+		desc.knots = NULL;
+		desc.knot_count = 0;
+		desc.is_closed = 0;
+		if (qaws_curve_create_nurbs(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "nurbs_tube");
+			obj_use_material(&w, "nurbs");
+			obj_tube(&w, crv, 64, 8, (qaws_scalar)0.04);
+			obj_group(&w, "nurbs_ctrl");
+			obj_use_material(&w, "ctrl_pts");
+			for (pi = 0; pi < 4; pi++)
+				obj_marker(&w, pts[pi], (qaws_scalar)0.05);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* 5: Hermite - 3D curve with explicit derivatives */
+	{
+		qaws_scalar pts[] = { 5,0,5, 6,2,7, 8,0,6, 9,1,5 };
+		qaws_scalar der[] = { 1,2,1, 1,-1,2, 1,1,-1, 1,-2,0 };
+		qaws_hermite_desc desc;
+		qaws_curve* crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.points = pts;
+		desc.derivatives = der;
+		desc.point_count = 4;
+		desc.derivative_count = 4;
+		if (qaws_curve_create_hermite(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "hermite_tube");
+			obj_use_material(&w, "hermite");
+			obj_tube(&w, crv, 64, 8, (qaws_scalar)0.04);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/families_3d.obj\n");
+}
+
+static void test_obj_3d_curvature_comb(void)
+{
+	/* 3D B-spline with curvature comb and control polygon */
+	obj_writer w;
+
+	printf("test_obj_3d_curvature_comb\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/curvature_comb_3d.obj",
+		OBJ_OUTPUT_DIR "/curvature_comb_3d.mtl"))
+		return;
+
+	obj_material(&w, "curve", 0.2, 0.7, 1.0);
+	obj_material(&w, "comb", 1.0, 0.4, 0.7);
+	obj_material(&w, "ctrl", 0.6, 0.6, 0.6);
+	obj_material(&w, "polygon", 0.4, 0.4, 0.4);
+
+	{
+		qaws_vec3 pts[] = {
+			{0,0,0}, {1,3,1}, {2,-1,2}, {3,2,0}, {4,-2,1}, {5,1,3}, {6,0,0}
+		};
+		qaws_bspline_desc desc;
+		qaws_curve* crv = NULL;
+		unsigned int pi;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.control_points = pts;
+		desc.control_point_count = 7;
+		desc.knots = NULL;
+		desc.knot_count = 0;
+		desc.is_uniform = 1;
+		desc.is_closed = 0;
+
+		if (qaws_curve_create_bspline(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			/* Tube */
+			obj_group(&w, "curve_tube");
+			obj_use_material(&w, "curve");
+			obj_tube(&w, crv, 100, 10, (qaws_scalar)0.03);
+
+			/* Curvature comb */
+			obj_group(&w, "curvature_comb");
+			obj_use_material(&w, "comb");
+			obj_curvature_comb(&w, crv, 100, (qaws_scalar)1.0);
+
+			/* Control polygon */
+			obj_group(&w, "control_polygon");
+			obj_use_material(&w, "polygon");
+			{
+				unsigned int first_vi = w.vertex_count + 1;
+				for (pi = 0; pi < 7; pi++)
+					obj_vertex(&w, pts[pi]);
+				fprintf(w.fp, "l");
+				for (pi = 0; pi < 7; pi++)
+					fprintf(w.fp, " %u", first_vi + pi);
+				fprintf(w.fp, "\n");
+			}
+
+			/* Control point markers */
+			obj_group(&w, "control_points");
+			obj_use_material(&w, "ctrl");
+			for (pi = 0; pi < 7; pi++)
+				obj_marker(&w, pts[pi], (qaws_scalar)0.05);
+
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/curvature_comb_3d.obj\n");
+}
+
+static void test_obj_3d_traversal(void)
+{
+	/* 3D curve with traversal: markers at uniform time intervals showing
+	   the difference between parameter-uniform and arc-length-uniform */
+	obj_writer w;
+
+	printf("test_obj_3d_traversal\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/traversal_3d.obj",
+		OBJ_OUTPUT_DIR "/traversal_3d.mtl"))
+		return;
+
+	obj_material(&w, "curve", 0.3, 0.6, 1.0);
+	obj_material(&w, "param_pts", 1.0, 0.3, 0.3);
+	obj_material(&w, "arc_pts", 0.3, 1.0, 0.3);
+	obj_material(&w, "tube", 0.2, 0.4, 0.7);
+
+	{
+		/* 3D curve with varying speed: tight curve then straight */
+		qaws_vec3 pts[] = {
+			{0,0,0}, {0,3,2}, {2,3,3}, {3,0,1}, {6,0,0}
+		};
+		qaws_bezier_desc desc;
+		qaws_curve* crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 4;
+		desc.control_points = pts;
+		desc.control_point_count = 5;
+
+		if (qaws_curve_create_bezier(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_range range = qaws_curve_get_parameter_range(crv);
+			unsigned int mi;
+
+			/* Tube */
+			obj_group(&w, "curve_tube");
+			obj_use_material(&w, "tube");
+			obj_tube(&w, crv, 80, 10, (qaws_scalar)0.04);
+
+			/* Parameter-uniform markers */
+			obj_group(&w, "param_uniform");
+			obj_use_material(&w, "param_pts");
+			for (mi = 0; mi <= 20; mi++)
+			{
+				qaws_scalar t = range.min_value + (range.max_value - range.min_value)
+					* (qaws_scalar)mi / (qaws_scalar)20;
+				qaws_eval_result_3d r;
+				if (qaws_curve_evaluate_3d(crv, t, QAWS_EVAL_FLAG_POSITION, &r)
+					== QAWS_STATUS_OK)
+					obj_marker(&w, r.position, (qaws_scalar)0.04);
+			}
+
+			/* Arc-length-uniform markers via traversal */
+			{
+				qaws_traversal_desc td;
+				qaws_traversal* trav = NULL;
+				memset(&td, 0, sizeof(td));
+				td.traversal_mode = QAWS_TRAVERSAL_MODE_ARC_LENGTH;
+				td.speed = (qaws_scalar)1.0;
+				td.clamp_to_domain = 1;
+
+				if (qaws_traversal_create(crv, &td, &trav) == QAWS_STATUS_OK)
+				{
+					qaws_scalar arc_len = 0;
+					qaws_curve_compute_arc_length(crv, range.min_value, range.max_value, &arc_len);
+
+					obj_group(&w, "arc_length_uniform");
+					obj_use_material(&w, "arc_pts");
+					for (mi = 0; mi <= 20; mi++)
+					{
+						qaws_scalar s = arc_len * (qaws_scalar)mi / (qaws_scalar)20;
+						qaws_eval_result_3d r;
+						if (qaws_traversal_evaluate_3d(trav, s, QAWS_EVAL_FLAG_POSITION, &r)
+							== QAWS_STATUS_OK)
+							obj_marker(&w, r.position, (qaws_scalar)0.04);
+					}
+					qaws_traversal_destroy(trav);
+				}
+			}
+
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/traversal_3d.obj\n");
+}
+
+static void test_obj_3d_torus_knot(void)
+{
+	/* Torus knot (p=2, q=3) - classic 3D knot on a torus surface */
+	obj_writer w;
+	unsigned int pi;
+
+	printf("test_obj_3d_torus_knot\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/torus_knot.obj",
+		OBJ_OUTPUT_DIR "/torus_knot.mtl"))
+		return;
+
+	obj_material(&w, "knot", 0.1, 0.8, 0.6);
+	obj_material(&w, "torus_wire", 0.3, 0.3, 0.3);
+
+	{
+		/* Build (2,3)-torus knot from Hermite segments */
+		/* x = (R + r*cos(q*t)) * cos(p*t)
+		   y = (R + r*cos(q*t)) * sin(p*t)
+		   z = r * sin(q*t) */
+		double R = 3.0, r_val = 1.0;
+		int p_val = 2, q_val = 3;
+		unsigned int num_pts = 49;  /* closed */
+		qaws_scalar pts[147];  /* 49 * 3 */
+		qaws_scalar der[147];
+		qaws_hermite_desc desc;
+		qaws_curve* curve = NULL;
+		/* Hermite spans are unit-width [i, i+1], so derivatives must be
+		   dC/dt_hermite = dC/dt_analytical * dt_analytical/dt_hermite.
+		   dt_analytical covers [0, 2pi] over (num_pts-1) spans. */
+		double dt_scale = 2.0 * M_PI / (double)(num_pts - 1);
+
+		for (pi = 0; pi < num_pts; pi++)
+		{
+			double t = 2.0 * M_PI * (double)pi / (double)(num_pts - 1);
+			double rr = R + r_val * cos((double)q_val * t);
+			double drr = -r_val * (double)q_val * sin((double)q_val * t);
+			pts[pi * 3 + 0] = (qaws_scalar)(rr * cos((double)p_val * t));
+			pts[pi * 3 + 1] = (qaws_scalar)(rr * sin((double)p_val * t));
+			pts[pi * 3 + 2] = (qaws_scalar)(r_val * sin((double)q_val * t));
+			/* Derivative scaled to Hermite parameterization */
+			der[pi * 3 + 0] = (qaws_scalar)((drr * cos((double)p_val * t)
+				- rr * (double)p_val * sin((double)p_val * t)) * dt_scale);
+			der[pi * 3 + 1] = (qaws_scalar)((drr * sin((double)p_val * t)
+				+ rr * (double)p_val * cos((double)p_val * t)) * dt_scale);
+			der[pi * 3 + 2] = (qaws_scalar)((r_val * (double)q_val * cos((double)q_val * t)) * dt_scale);
+		}
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_3D;
+		desc.degree = 3;
+		desc.points = pts;
+		desc.derivatives = der;
+		desc.point_count = num_pts;
+		desc.derivative_count = num_pts;
+
+		if (qaws_curve_create_hermite(&desc, &curve) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "torus_knot_tube");
+			obj_use_material(&w, "knot");
+			obj_tube(&w, curve, 300, 12, (qaws_scalar)0.12);
+
+			qaws_curve_destroy(curve);
+		}
+
+		/* Draw reference torus wireframe (circles at major/minor radii) */
+		obj_group(&w, "torus_reference");
+		obj_use_material(&w, "torus_wire");
+		{
+			/* Major circle */
+			unsigned int first_vi = w.vertex_count + 1;
+			unsigned int ti;
+			for (ti = 0; ti <= 64; ti++)
+			{
+				double angle = 2.0 * M_PI * (double)ti / 64.0;
+				qaws_vec3 v;
+				v.x = (qaws_scalar)(R * cos(angle));
+				v.y = (qaws_scalar)(R * sin(angle));
+				v.z = 0;
+				obj_vertex(&w, v);
+			}
+			fprintf(w.fp, "l");
+			for (ti = 0; ti <= 64; ti++)
+				fprintf(w.fp, " %u", first_vi + ti);
+			fprintf(w.fp, "\n");
+		}
+	}
+
+	obj_close(&w);
+	printf("  -> " OBJ_OUTPUT_DIR "/torus_knot.obj\n");
+}
+
+/* ======================================================================== */
+/*  Surface unit tests                                                      */
+/* ======================================================================== */
+
+static void test_surface_bezier(void)
+{
+	/* Bilinear Bezier patch: 4 corner points, degree (1,1).
+	   S(u,v) = (1-u)(1-v)*P00 + u*(1-v)*P10 + (1-u)*v*P01 + u*v*P11
+	   Corners: (0,0,0), (2,0,0), (0,3,0), (2,3,1) */
+	qaws_surface* surf = NULL;
+	qaws_surface_bezier_desc desc;
+	qaws_surface_eval_result r;
+	qaws_status s;
+	qaws_vec3 cp[4];
+	qaws_range ur, vr;
+
+	printf("test_surface_bezier\n");
+
+	cp[0].x = 0; cp[0].y = 0; cp[0].z = 0;  /* P[0][0] */
+	cp[1].x = 0; cp[1].y = 3; cp[1].z = 0;  /* P[0][1] */
+	cp[2].x = 2; cp[2].y = 0; cp[2].z = 0;  /* P[1][0] */
+	cp[3].x = 2; cp[3].y = 3; cp[3].z = 1;  /* P[1][1] */
+
+	desc.u_degree = 1;
+	desc.v_degree = 1;
+	desc.control_points = cp;
+	desc.u_point_count = 2;
+	desc.v_point_count = 2;
+
+	s = qaws_surface_create_bezier(&desc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "bezier surface create");
+	TEST_ASSERT(surf != NULL, "bezier surface not null");
+	TEST_ASSERT(qaws_surface_get_kind(surf) == QAWS_SURFACE_KIND_BEZIER, "bezier kind");
+	TEST_ASSERT(qaws_surface_get_u_degree(surf) == 1, "bezier u degree");
+	TEST_ASSERT(qaws_surface_get_v_degree(surf) == 1, "bezier v degree");
+	TEST_ASSERT(qaws_surface_is_rational(surf) == 0, "bezier not rational");
+
+	ur = qaws_surface_get_u_range(surf);
+	vr = qaws_surface_get_v_range(surf);
+	TEST_ASSERT(ur.min_value == 0 && ur.max_value == 1, "bezier u range");
+	TEST_ASSERT(vr.min_value == 0 && vr.max_value == 1, "bezier v range");
+
+	/* Evaluate at corner (0,0) -> P00 = (0,0,0) */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 0, 0, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "bezier eval (0,0)");
+	TEST_ASSERT(fabs(r.position.x) < 0.01f && fabs(r.position.y) < 0.01f
+		&& fabs(r.position.z) < 0.01f, "bezier pos (0,0) = origin");
+
+	/* Evaluate at corner (1,1) -> P11 = (2,3,1) */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 1, 1, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "bezier eval (1,1)");
+	TEST_ASSERT(fabs(r.position.x - 2) < 0.01f && fabs(r.position.y - 3) < 0.01f
+		&& fabs(r.position.z - 1) < 0.01f, "bezier pos (1,1) = (2,3,1)");
+
+	/* Evaluate at center (0.5,0.5) -> average = (1, 1.5, 0.25) */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, (qaws_scalar)0.5, (qaws_scalar)0.5,
+		QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_NORMAL, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "bezier eval center");
+	TEST_ASSERT(fabs(r.position.x - 1) < 0.01f && fabs(r.position.y - 1.5f) < 0.01f,
+		"bezier center position");
+	TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_NORMAL, "bezier normal computed");
+
+	/* Sample grid */
+	{
+		qaws_vec3 pts[25];
+		unsigned int count = 0;
+		s = qaws_surface_sample(surf, 5, 5, pts, 25, &count);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "bezier sample ok");
+		TEST_ASSERT(count == 25, "bezier sample count 25");
+	}
+
+	qaws_surface_destroy(surf);
+}
+
+static void test_surface_bspline(void)
+{
+	/* Bicubic B-spline surface: 5x5 control points, degree (3,3).
+	   Create a simple hill shape. */
+	qaws_surface* surf = NULL;
+	qaws_surface_bspline_desc desc;
+	qaws_surface_eval_result r;
+	qaws_status s;
+	qaws_vec3 cp[25]; /* 5x5 */
+	unsigned int i, j;
+
+	printf("test_surface_bspline\n");
+
+	for (i = 0; i < 5; i++)
+	{
+		for (j = 0; j < 5; j++)
+		{
+			unsigned int idx = i * 5 + j;
+			cp[idx].x = (qaws_scalar)i;
+			cp[idx].y = (qaws_scalar)j;
+			/* Smooth hill: z peaks at center */
+			cp[idx].z = (qaws_scalar)(2.0 * exp(-0.5 * ((i - 2.0) * (i - 2.0) + (j - 2.0) * (j - 2.0))));
+		}
+	}
+
+	memset(&desc, 0, sizeof(desc));
+	desc.u_degree = 3;
+	desc.v_degree = 3;
+	desc.control_points = cp;
+	desc.u_point_count = 5;
+	desc.v_point_count = 5;
+	desc.u_knot_count = 0; /* auto uniform */
+	desc.v_knot_count = 0;
+
+	s = qaws_surface_create_bspline(&desc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "bspline surface create");
+	TEST_ASSERT(surf != NULL, "bspline surface not null");
+	TEST_ASSERT(qaws_surface_get_kind(surf) == QAWS_SURFACE_KIND_BSPLINE, "bspline kind");
+	TEST_ASSERT(qaws_surface_get_u_degree(surf) == 3, "bspline u degree 3");
+	TEST_ASSERT(qaws_surface_is_rational(surf) == 0, "bspline not rational");
+
+	/* Evaluate position + derivatives at domain center */
+	{
+		qaws_range ur = qaws_surface_get_u_range(surf);
+		qaws_range vr = qaws_surface_get_v_range(surf);
+		qaws_scalar um = (ur.min_value + ur.max_value) * (qaws_scalar)0.5;
+		qaws_scalar vm = (vr.min_value + vr.max_value) * (qaws_scalar)0.5;
+
+		memset(&r, 0, sizeof(r));
+		s = qaws_surface_evaluate(surf, um, vm,
+			QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_DU
+			| QAWS_SURFACE_EVAL_DV | QAWS_SURFACE_EVAL_NORMAL, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "bspline eval center ok");
+		TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_POSITION, "bspline pos valid");
+		TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_NORMAL, "bspline normal valid");
+		/* Z should be positive at the hill */
+		TEST_ASSERT(r.position.z > 0, "bspline z > 0 at hill");
+	}
+
+	/* Sample grid */
+	{
+		qaws_vec3 pts[100];
+		unsigned int count = 0;
+		s = qaws_surface_sample(surf, 10, 10, pts, 100, &count);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "bspline sample ok");
+		TEST_ASSERT(count == 100, "bspline sample count 100");
+	}
+
+	qaws_surface_destroy(surf);
+}
+
+static void test_surface_nurbs(void)
+{
+	/* NURBS sphere octant: degree (2,2) with 3x3 CPs and weights.
+	   This tests rational surface evaluation. */
+	qaws_surface* surf = NULL;
+	qaws_surface_nurbs_desc desc;
+	qaws_surface_eval_result r;
+	qaws_status s;
+	qaws_scalar w = (qaws_scalar)0.707106781f; /* 1/sqrt(2) */
+
+	/* 3x3 control points for a quarter sphere octant */
+	qaws_vec3 cp[9] = {
+		{0, 0, 1}, {0, 0, w}, {0, 0, 0},    /* row 0 */
+		{0, 0, w}, {0, 0, 0.5f}, {0, w, 0},  /* row 1 */
+		{1, 0, 0}, {w, 0, 0}, {0, 1, 0}      /* row 2 */
+	};
+	qaws_scalar weights[9] = {
+		1,  w,  1,
+		w,  0.5f, w,
+		1,  w,  1
+	};
+
+	printf("test_surface_nurbs\n");
+
+	memset(&desc, 0, sizeof(desc));
+	desc.u_degree = 2;
+	desc.v_degree = 2;
+	desc.control_points = cp;
+	desc.u_point_count = 3;
+	desc.v_point_count = 3;
+	desc.weights = weights;
+	desc.u_knot_count = 0; /* auto uniform */
+	desc.v_knot_count = 0;
+
+	s = qaws_surface_create_nurbs(&desc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "nurbs surface create");
+	TEST_ASSERT(surf != NULL, "nurbs surface not null");
+	TEST_ASSERT(qaws_surface_get_kind(surf) == QAWS_SURFACE_KIND_NURBS, "nurbs kind");
+	TEST_ASSERT(qaws_surface_is_rational(surf) == 1, "nurbs is rational");
+
+	/* Evaluate at domain center */
+	{
+		qaws_range ur = qaws_surface_get_u_range(surf);
+		qaws_range vr = qaws_surface_get_v_range(surf);
+		qaws_scalar um = (ur.min_value + ur.max_value) * (qaws_scalar)0.5;
+		qaws_scalar vm = (vr.min_value + vr.max_value) * (qaws_scalar)0.5;
+
+		memset(&r, 0, sizeof(r));
+		s = qaws_surface_evaluate(surf, um, vm,
+			QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_NORMAL, &r);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "nurbs eval center");
+		TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_POSITION, "nurbs pos valid");
+		TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_NORMAL, "nurbs normal valid");
+	}
+
+	/* Evaluate at corners */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 0, 0, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "nurbs eval corner (0,0)");
+
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 1, 1, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "nurbs eval corner (1,1)");
+
+	/* Sample grid */
+	{
+		qaws_vec3 pts[64];
+		unsigned int count = 0;
+		s = qaws_surface_sample(surf, 8, 8, pts, 64, &count);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "nurbs sample ok");
+		TEST_ASSERT(count == 64, "nurbs sample count 64");
+	}
+
+	qaws_surface_destroy(surf);
+}
+
+static void test_surface_error_handling(void)
+{
+	qaws_surface* surf = NULL;
+	qaws_surface_bezier_desc bdesc;
+	qaws_surface_bspline_desc sdesc;
+	qaws_surface_nurbs_desc ndesc;
+	qaws_status s;
+
+	printf("test_surface_error_handling\n");
+
+	/* Null desc */
+	s = qaws_surface_create_bezier(NULL, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "bezier null desc");
+
+	/* Null output */
+	memset(&bdesc, 0, sizeof(bdesc));
+	s = qaws_surface_create_bezier(&bdesc, NULL);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "bezier null out");
+
+	/* Bad degree */
+	bdesc.u_degree = 0;
+	bdesc.v_degree = 1;
+	s = qaws_surface_create_bezier(&bdesc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_DEGREE, "bezier bad degree");
+
+	/* Bad point count */
+	{
+		qaws_vec3 cp[4] = {{0,0,0},{1,0,0},{0,1,0},{1,1,0}};
+		bdesc.u_degree = 1;
+		bdesc.v_degree = 1;
+		bdesc.control_points = cp;
+		bdesc.u_point_count = 3; /* wrong: should be 2 for degree 1 */
+		bdesc.v_point_count = 2;
+		s = qaws_surface_create_bezier(&bdesc, &surf);
+		TEST_ASSERT(s == QAWS_STATUS_INVALID_CONTROL_POINT_COUNT, "bezier bad cp count");
+	}
+
+	/* B-spline null desc */
+	s = qaws_surface_create_bspline(NULL, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "bspline null desc");
+
+	/* B-spline too few CPs */
+	memset(&sdesc, 0, sizeof(sdesc));
+	{
+		qaws_vec3 cp2[4] = {{0,0,0},{1,0,0},{0,1,0},{1,1,0}};
+		sdesc.u_degree = 3;
+		sdesc.v_degree = 3;
+		sdesc.control_points = cp2;
+		sdesc.u_point_count = 2;
+		sdesc.v_point_count = 2;
+		s = qaws_surface_create_bspline(&sdesc, &surf);
+		TEST_ASSERT(s == QAWS_STATUS_INVALID_CONTROL_POINT_COUNT, "bspline too few CPs");
+	}
+
+	/* NURBS null weights */
+	memset(&ndesc, 0, sizeof(ndesc));
+	{
+		qaws_vec3 cp3[4] = {{0,0,0},{1,0,0},{0,1,0},{1,1,0}};
+		ndesc.u_degree = 1;
+		ndesc.v_degree = 1;
+		ndesc.control_points = cp3;
+		ndesc.u_point_count = 2;
+		ndesc.v_point_count = 2;
+		ndesc.weights = NULL;
+		s = qaws_surface_create_nurbs(&ndesc, &surf);
+		TEST_ASSERT(s == QAWS_STATUS_INVALID_ARGUMENT, "nurbs null weights");
+	}
+
+	/* Null surface queries */
+	TEST_ASSERT(qaws_surface_get_kind(NULL) == QAWS_SURFACE_KIND_INVALID, "null kind");
+	TEST_ASSERT(qaws_surface_get_u_degree(NULL) == 0, "null u_degree");
+	TEST_ASSERT(qaws_surface_get_v_degree(NULL) == 0, "null v_degree");
+	TEST_ASSERT(qaws_surface_is_rational(NULL) == 0, "null rational");
+}
+
+static void test_surface_ruled(void)
+{
+	/* Ruled surface between two 3D Bezier curves */
+	qaws_curve* ca = NULL;
+	qaws_curve* cb = NULL;
+	qaws_surface* surf = NULL;
+	qaws_surface_ruled_desc rdesc;
+	qaws_surface_eval_result r;
+	qaws_status s;
+
+	printf("test_surface_ruled\n");
+
+	/* Curve A: straight line from (0,0,0) to (4,0,0) */
+	{
+		qaws_scalar pts_a[] = {0,0,0, 4,0,0};
+		qaws_bezier_desc d;
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 1;
+		d.control_points = pts_a;
+		d.control_point_count = 2;
+		qaws_curve_create_bezier(&d, &ca);
+	}
+
+	/* Curve B: arc from (0,0,2) through (2,2,2) to (4,0,2) */
+	{
+		qaws_scalar pts_b[] = {0,0,2, 1,2,2, 3,2,2, 4,0,2};
+		qaws_bezier_desc d;
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 3;
+		d.control_points = pts_b;
+		d.control_point_count = 4;
+		qaws_curve_create_bezier(&d, &cb);
+	}
+
+	rdesc.curve_a = ca;
+	rdesc.curve_b = cb;
+	s = qaws_surface_create_ruled(&rdesc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "ruled create ok");
+	TEST_ASSERT(qaws_surface_get_kind(surf) == QAWS_SURFACE_KIND_RULED, "ruled kind");
+
+	/* At v=0 should be on curve A */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 0, 0, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "ruled eval (0,0)");
+	TEST_ASSERT(fabs(r.position.x) < 0.01f && fabs(r.position.z) < 0.01f,
+		"ruled v=0 on curve A start");
+
+	/* At v=1 should be on curve B */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 0, 1, QAWS_SURFACE_EVAL_POSITION, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "ruled eval (0,1)");
+	TEST_ASSERT(fabs(r.position.z - 2) < 0.01f, "ruled v=1 on curve B");
+
+	/* dv should be B-A direction (upward) */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, (qaws_scalar)0.5, (qaws_scalar)0.5,
+		QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_DU
+		| QAWS_SURFACE_EVAL_DV | QAWS_SURFACE_EVAL_NORMAL, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "ruled eval center");
+	TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_NORMAL, "ruled normal valid");
+	/* Position z should be ~1 at v=0.5 */
+	TEST_ASSERT(fabs(r.position.z - 1) < 0.2f, "ruled midpoint z ~1");
+
+	/* dvv should be 0 (linear in v) */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, (qaws_scalar)0.5, (qaws_scalar)0.5,
+		QAWS_SURFACE_EVAL_DVV, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "ruled dvv eval");
+	TEST_ASSERT(fabs(r.dvv.x) < 0.01f && fabs(r.dvv.y) < 0.01f
+		&& fabs(r.dvv.z) < 0.01f, "ruled dvv = 0");
+
+	/* Sample grid */
+	{
+		qaws_vec3 pts[100];
+		unsigned int count = 0;
+		s = qaws_surface_sample(surf, 10, 10, pts, 100, &count);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "ruled sample ok");
+		TEST_ASSERT(count == 100, "ruled sample count 100");
+	}
+
+	qaws_surface_destroy(surf);
+	qaws_curve_destroy(ca);
+	qaws_curve_destroy(cb);
+}
+
+static void test_surface_swept(void)
+{
+	/* Swept surface: circle cross-section swept along a 3D Bezier path */
+	qaws_curve* path = NULL;
+	qaws_curve* profile = NULL;
+	qaws_surface* surf = NULL;
+	qaws_surface_swept_desc sdesc;
+	qaws_surface_eval_result r;
+	qaws_status s;
+	unsigned int i;
+
+	printf("test_surface_swept\n");
+
+	/* Path: cubic Bezier curve going from (0,0,0) to (4,0,3) with some curvature */
+	{
+		qaws_scalar pts[] = {0,0,0, 1,2,1, 3,2,2, 4,0,3};
+		qaws_bezier_desc d;
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 3;
+		d.control_points = pts;
+		d.control_point_count = 4;
+		qaws_curve_create_bezier(&d, &path);
+	}
+
+	/* Profile: circle approximation using 2D cubic Bezier */
+	{
+		qaws_scalar pts[26]; /* 13 points x 2 */
+		qaws_bezier_desc d;
+		for (i = 0; i < 13; i++)
+		{
+			double angle = 2.0 * M_PI * (double)i / 12.0;
+			pts[i * 2 + 0] = (qaws_scalar)cos(angle);
+			pts[i * 2 + 1] = (qaws_scalar)sin(angle);
+		}
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_2D;
+		d.degree = 12;
+		d.control_points = pts;
+		d.control_point_count = 13;
+		qaws_curve_create_bezier(&d, &profile);
+	}
+
+	memset(&sdesc, 0, sizeof(sdesc));
+	sdesc.path = path;
+	sdesc.profile = profile;
+	sdesc.scale = (qaws_scalar)0.3;
+
+	s = qaws_surface_create_swept(&sdesc, &surf);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "swept create ok");
+	TEST_ASSERT(qaws_surface_get_kind(surf) == QAWS_SURFACE_KIND_SWEPT, "swept kind");
+
+	/* Evaluate at path start, profile center-ish */
+	memset(&r, 0, sizeof(r));
+	s = qaws_surface_evaluate(surf, 0, 0,
+		QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_DV | QAWS_SURFACE_EVAL_NORMAL, &r);
+	TEST_ASSERT(s == QAWS_STATUS_OK, "swept eval ok");
+	TEST_ASSERT(r.valid_flags & QAWS_SURFACE_EVAL_POSITION, "swept pos valid");
+
+	/* Sample grid */
+	{
+		qaws_vec3 pts[200];
+		unsigned int count = 0;
+		s = qaws_surface_sample(surf, 20, 10, pts, 200, &count);
+		TEST_ASSERT(s == QAWS_STATUS_OK, "swept sample ok");
+		TEST_ASSERT(count == 200, "swept sample count 200");
+	}
+
+	qaws_surface_destroy(surf);
+	qaws_curve_destroy(path);
+	qaws_curve_destroy(profile);
+}
+
+/* ======================================================================== */
+/*  OBJ Surface visual tests                                                */
+/* ======================================================================== */
+
+/* Write a triangle mesh for a sampled surface grid */
+static void obj_surface_mesh(
+	obj_writer* w, qaws_surface const* surf,
+	unsigned int u_samples, unsigned int v_samples)
+{
+	qaws_range ur = qaws_surface_get_u_range(surf);
+	qaws_range vr = qaws_surface_get_v_range(surf);
+	qaws_scalar u_min = ur.min_value, u_len = ur.max_value - ur.min_value;
+	qaws_scalar v_min = vr.min_value, v_len = vr.max_value - vr.min_value;
+	unsigned int first_v = w->vertex_count + 1;
+	unsigned int first_n = w->normal_count + 1;
+	unsigned int ui, vi;
+
+	/* Emit vertices and normals */
+	for (ui = 0; ui < u_samples; ui++)
+	{
+		qaws_scalar u = u_min + u_len * (qaws_scalar)ui / (qaws_scalar)(u_samples - 1);
+		for (vi = 0; vi < v_samples; vi++)
+		{
+			qaws_scalar v = v_min + v_len * (qaws_scalar)vi / (qaws_scalar)(v_samples - 1);
+			qaws_surface_eval_result r;
+			memset(&r, 0, sizeof(r));
+			qaws_surface_evaluate(surf, u, v,
+				QAWS_SURFACE_EVAL_POSITION | QAWS_SURFACE_EVAL_NORMAL, &r);
+			obj_vertex(w, r.position);
+			obj_normal(w, r.normal);
+		}
+	}
+
+	/* Emit quad faces (as two triangles each) */
+	for (ui = 0; ui < u_samples - 1; ui++)
+	{
+		for (vi = 0; vi < v_samples - 1; vi++)
+		{
+			unsigned int v00 = first_v + ui * v_samples + vi;
+			unsigned int v01 = v00 + 1;
+			unsigned int v10 = v00 + v_samples;
+			unsigned int v11 = v10 + 1;
+			unsigned int n00 = first_n + ui * v_samples + vi;
+			unsigned int n01 = n00 + 1;
+			unsigned int n10 = n00 + v_samples;
+			unsigned int n11 = n10 + 1;
+			fprintf(w->fp, "f %u//%u %u//%u %u//%u\n", v00, n00, v01, n01, v10, n10);
+			fprintf(w->fp, "f %u//%u %u//%u %u//%u\n", v01, n01, v11, n11, v10, n10);
+		}
+	}
+}
+
+/* Draw control point grid as markers and wireframe */
+static void obj_surface_cp_grid(
+	obj_writer* w, qaws_vec3 const* cp,
+	unsigned int u_count, unsigned int v_count,
+	qaws_scalar marker_size)
+{
+	unsigned int i, j;
+	unsigned int first_v;
+
+	/* Draw markers at each CP */
+	for (i = 0; i < u_count; i++)
+		for (j = 0; j < v_count; j++)
+			obj_sphere(w, cp[i * v_count + j], marker_size);
+
+	/* Draw grid lines */
+	first_v = w->vertex_count + 1;
+	for (i = 0; i < u_count; i++)
+		for (j = 0; j < v_count; j++)
+			obj_vertex(w, cp[i * v_count + j]);
+
+	/* U-direction lines */
+	for (i = 0; i < u_count; i++)
+	{
+		fprintf(w->fp, "l");
+		for (j = 0; j < v_count; j++)
+			fprintf(w->fp, " %u", first_v + i * v_count + j);
+		fprintf(w->fp, "\n");
+	}
+	/* V-direction lines */
+	for (j = 0; j < v_count; j++)
+	{
+		fprintf(w->fp, "l");
+		for (i = 0; i < u_count; i++)
+			fprintf(w->fp, " %u", first_v + i * v_count + j);
+		fprintf(w->fp, "\n");
+	}
+}
+
+static void test_obj_surface_bezier(void)
+{
+	obj_writer w;
+	qaws_surface* surf = NULL;
+	qaws_surface_bezier_desc desc;
+	/* Bicubic Bezier patch (4x4 CPs) shaped like a saddle */
+	qaws_vec3 cp[16];
+	unsigned int i, j;
+
+	printf("test_obj_surface_bezier\n");
+
+	for (i = 0; i < 4; i++)
+	{
+		for (j = 0; j < 4; j++)
+		{
+			unsigned int idx = i * 4 + j;
+			qaws_scalar x = (qaws_scalar)i - (qaws_scalar)1.5;
+			qaws_scalar y = (qaws_scalar)j - (qaws_scalar)1.5;
+			cp[idx].x = x;
+			cp[idx].y = y;
+			cp[idx].z = (qaws_scalar)(0.5 * (x * x - y * y)); /* saddle */
+		}
+	}
+
+	desc.u_degree = 3;
+	desc.v_degree = 3;
+	desc.control_points = cp;
+	desc.u_point_count = 4;
+	desc.v_point_count = 4;
+
+	if (qaws_surface_create_bezier(&desc, &surf) != QAWS_STATUS_OK) return;
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_bezier.obj",
+		OBJ_OUTPUT_DIR "/surface_bezier.mtl"))
+	{
+		qaws_surface_destroy(surf);
+		return;
+	}
+
+	obj_material(&w, "patch", 0.2, 0.6, 1.0);
+	obj_material(&w, "cp_grid", 1.0, 0.3, 0.1);
+
+	obj_group(&w, "bezier_patch");
+	obj_use_material(&w, "patch");
+	obj_surface_mesh(&w, surf, 32, 32);
+
+	obj_group(&w, "control_points");
+	obj_use_material(&w, "cp_grid");
+	obj_surface_cp_grid(&w, cp, 4, 4, (qaws_scalar)0.06);
+
+	obj_close(&w);
+	qaws_surface_destroy(surf);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_bezier.obj\n");
+}
+
+static void test_obj_surface_bspline(void)
+{
+	obj_writer w;
+	qaws_surface* surf = NULL;
+	qaws_surface_bspline_desc desc;
+	/* 6x6 control points, degree (3,3) - rolling terrain */
+	qaws_vec3 cp[36];
+	unsigned int i, j;
+
+	printf("test_obj_surface_bspline\n");
+
+	for (i = 0; i < 6; i++)
+	{
+		for (j = 0; j < 6; j++)
+		{
+			unsigned int idx = i * 6 + j;
+			qaws_scalar x = (qaws_scalar)i;
+			qaws_scalar y = (qaws_scalar)j;
+			cp[idx].x = x;
+			cp[idx].y = y;
+			cp[idx].z = (qaws_scalar)(sin(x * 1.2) * cos(y * 0.8) * 0.8);
+		}
+	}
+
+	memset(&desc, 0, sizeof(desc));
+	desc.u_degree = 3;
+	desc.v_degree = 3;
+	desc.control_points = cp;
+	desc.u_point_count = 6;
+	desc.v_point_count = 6;
+	desc.u_knot_count = 0;
+	desc.v_knot_count = 0;
+
+	if (qaws_surface_create_bspline(&desc, &surf) != QAWS_STATUS_OK) return;
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_bspline.obj",
+		OBJ_OUTPUT_DIR "/surface_bspline.mtl"))
+	{
+		qaws_surface_destroy(surf);
+		return;
+	}
+
+	obj_material(&w, "terrain", 0.3, 0.8, 0.3);
+	obj_material(&w, "cp_grid", 0.8, 0.4, 0.1);
+
+	obj_group(&w, "bspline_surface");
+	obj_use_material(&w, "terrain");
+	obj_surface_mesh(&w, surf, 40, 40);
+
+	obj_group(&w, "control_points");
+	obj_use_material(&w, "cp_grid");
+	obj_surface_cp_grid(&w, cp, 6, 6, (qaws_scalar)0.05);
+
+	obj_close(&w);
+	qaws_surface_destroy(surf);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_bspline.obj\n");
+}
+
+static void test_obj_surface_nurbs(void)
+{
+	obj_writer w;
+	qaws_surface* surf = NULL;
+	qaws_surface_nurbs_desc desc;
+	qaws_scalar wm = (qaws_scalar)0.707106781; /* 1/sqrt(2) */
+	qaws_scalar R = 2;
+	unsigned int row, col;
+
+	/* Full hemisphere: quarter-circle profile (3 CPs in u) revolved 360 degrees
+	   (9 CPs in v). Degree (2,2). */
+	qaws_vec3 cp[27]; /* 3 x 9 */
+	qaws_scalar weights[27];
+	qaws_scalar u_knots[6] = {0, 0, 0, 1, 1, 1};
+	/* 9 CPs, degree 2 -> 12 knots, double knots at each 90-degree break */
+	qaws_scalar v_knots[12] = {
+		0, 0, 0,
+		0.25f, 0.25f,
+		0.5f, 0.5f,
+		0.75f, 0.75f,
+		1, 1, 1
+	};
+
+	printf("test_obj_surface_nurbs\n");
+
+	/* Profile: quarter circle in XZ plane from (R,0,0) up to (0,0,R).
+	   3 rows: P0=(R,0,0) w=1, P1=(R,0,R) w=1/sqrt2, P2=(0,0,R) w=1 */
+	{
+		qaws_scalar profile_r[3] = {R, R, 0}; /* radial distance from Z axis */
+		qaws_scalar profile_z[3] = {0, R, R};
+		qaws_scalar profile_w[3] = {1, wm, 1};
+
+		/* 9 revolution CPs at 0, 45, 90, 135, 180, 225, 270, 315, 360 degrees */
+		double angles[9] = {0, 45, 90, 135, 180, 225, 270, 315, 360};
+		qaws_scalar rev_w[9] = {1, wm, 1, wm, 1, wm, 1, wm, 1};
+
+		for (row = 0; row < 3; row++)
+		{
+			qaws_scalar r_val = profile_r[row];
+			qaws_scalar z_val = profile_z[row];
+			qaws_scalar pw = profile_w[row];
+			for (col = 0; col < 9; col++)
+			{
+				double a = angles[col] * 3.14159265358979323846 / 180.0;
+				unsigned int idx = row * 9 + col;
+				cp[idx].x = (qaws_scalar)(r_val * cos(a));
+				cp[idx].y = (qaws_scalar)(r_val * sin(a));
+				cp[idx].z = z_val;
+				weights[idx] = pw * rev_w[col];
+			}
+		}
+	}
+
+	memset(&desc, 0, sizeof(desc));
+	desc.u_degree = 2;
+	desc.v_degree = 2;
+	desc.control_points = cp;
+	desc.u_point_count = 3;
+	desc.v_point_count = 9;
+	desc.weights = weights;
+	desc.u_knots = u_knots;
+	desc.u_knot_count = 6;
+	desc.v_knots = v_knots;
+	desc.v_knot_count = 12;
+
+	if (qaws_surface_create_nurbs(&desc, &surf) != QAWS_STATUS_OK)
+	{
+		printf("  SKIP: nurbs surface create failed\n");
+		return;
+	}
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_nurbs.obj",
+		OBJ_OUTPUT_DIR "/surface_nurbs.mtl"))
+	{
+		qaws_surface_destroy(surf);
+		return;
+	}
+
+	obj_material(&w, "shell", 0.8, 0.2, 0.6);
+	obj_material(&w, "cp_grid", 0.3, 0.3, 0.9);
+
+	obj_group(&w, "nurbs_surface");
+	obj_use_material(&w, "shell");
+	obj_surface_mesh(&w, surf, 32, 32);
+
+	obj_group(&w, "control_points");
+	obj_use_material(&w, "cp_grid");
+	obj_surface_cp_grid(&w, cp, 3, 9, (qaws_scalar)0.08);
+
+	obj_close(&w);
+	qaws_surface_destroy(surf);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_nurbs.obj\n");
+}
+
+static void test_obj_surface_gallery(void)
+{
+	/* All three surface types in one OBJ file for comparison */
+	obj_writer w;
+	qaws_surface* bezier_surf = NULL;
+	qaws_surface* bspline_surf = NULL;
+	qaws_surface* nurbs_surf = NULL;
+	unsigned int i, j;
+
+	printf("test_obj_surface_gallery\n");
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_gallery.obj",
+		OBJ_OUTPUT_DIR "/surface_gallery.mtl"))
+		return;
+
+	obj_material(&w, "bezier", 0.2, 0.5, 1.0);
+	obj_material(&w, "bspline", 0.2, 0.9, 0.3);
+	obj_material(&w, "nurbs", 1.0, 0.3, 0.5);
+	obj_material(&w, "cp", 0.6, 0.6, 0.6);
+
+	/* Bezier: wavy patch, offset to x=[-3, 0] */
+	{
+		qaws_vec3 cp[16];
+		qaws_surface_bezier_desc desc;
+		for (i = 0; i < 4; i++)
+			for (j = 0; j < 4; j++)
+			{
+				unsigned int idx = i * 4 + j;
+				cp[idx].x = (qaws_scalar)i - 5;
+				cp[idx].y = (qaws_scalar)j;
+				cp[idx].z = (qaws_scalar)(sin((double)i * 1.2) * sin((double)j * 1.2));
+			}
+		desc.u_degree = 3;
+		desc.v_degree = 3;
+		desc.control_points = cp;
+		desc.u_point_count = 4;
+		desc.v_point_count = 4;
+		if (qaws_surface_create_bezier(&desc, &bezier_surf) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "bezier_patch");
+			obj_use_material(&w, "bezier");
+			obj_surface_mesh(&w, bezier_surf, 24, 24);
+			obj_group(&w, "bezier_cp");
+			obj_use_material(&w, "cp");
+			obj_surface_cp_grid(&w, cp, 4, 4, (qaws_scalar)0.05);
+		}
+	}
+
+	/* B-spline: terrain, centered at x=[0, 5] */
+	{
+		qaws_vec3 cp[36];
+		qaws_surface_bspline_desc desc;
+		for (i = 0; i < 6; i++)
+			for (j = 0; j < 6; j++)
+			{
+				unsigned int idx = i * 6 + j;
+				cp[idx].x = (qaws_scalar)i;
+				cp[idx].y = (qaws_scalar)j;
+				cp[idx].z = (qaws_scalar)(0.6 * cos((double)i * 0.9) * sin((double)j * 0.7));
+			}
+		memset(&desc, 0, sizeof(desc));
+		desc.u_degree = 3;
+		desc.v_degree = 3;
+		desc.control_points = cp;
+		desc.u_point_count = 6;
+		desc.v_point_count = 6;
+		if (qaws_surface_create_bspline(&desc, &bspline_surf) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "bspline_surface");
+			obj_use_material(&w, "bspline");
+			obj_surface_mesh(&w, bspline_surf, 32, 32);
+			obj_group(&w, "bspline_cp");
+			obj_use_material(&w, "cp");
+			obj_surface_cp_grid(&w, cp, 6, 6, (qaws_scalar)0.05);
+		}
+	}
+
+	/* NURBS: weighted dome, offset to x=[7, 10] */
+	{
+		qaws_vec3 cp[9];
+		qaws_scalar wt[9];
+		qaws_surface_nurbs_desc desc;
+		for (i = 0; i < 3; i++)
+			for (j = 0; j < 3; j++)
+			{
+				unsigned int idx = i * 3 + j;
+				cp[idx].x = (qaws_scalar)i + 7;
+				cp[idx].y = (qaws_scalar)j;
+				cp[idx].z = (i == 1 && j == 1) ? (qaws_scalar)2.0 : 0;
+				wt[idx] = (i == 1 && j == 1) ? (qaws_scalar)2.0 : (qaws_scalar)1.0;
+			}
+		memset(&desc, 0, sizeof(desc));
+		desc.u_degree = 2;
+		desc.v_degree = 2;
+		desc.control_points = cp;
+		desc.u_point_count = 3;
+		desc.v_point_count = 3;
+		desc.weights = wt;
+		if (qaws_surface_create_nurbs(&desc, &nurbs_surf) == QAWS_STATUS_OK)
+		{
+			obj_group(&w, "nurbs_surface");
+			obj_use_material(&w, "nurbs");
+			obj_surface_mesh(&w, nurbs_surf, 24, 24);
+			obj_group(&w, "nurbs_cp");
+			obj_use_material(&w, "cp");
+			obj_surface_cp_grid(&w, cp, 3, 3, (qaws_scalar)0.06);
+		}
+	}
+
+	obj_close(&w);
+	if (bezier_surf) qaws_surface_destroy(bezier_surf);
+	if (bspline_surf) qaws_surface_destroy(bspline_surf);
+	if (nurbs_surf) qaws_surface_destroy(nurbs_surf);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_gallery.obj\n");
+}
+
+static void test_obj_surface_ruled(void)
+{
+	obj_writer w;
+	qaws_curve* ca = NULL;
+	qaws_curve* cb = NULL;
+	qaws_surface* surf = NULL;
+	qaws_surface_ruled_desc rdesc;
+
+	printf("test_obj_surface_ruled\n");
+
+	/* Curve A: wavy line at z=0 */
+	{
+		qaws_scalar pts[] = {0,0,0, 1,2,0, 3,-2,0, 5,1,0, 7,0,0};
+		qaws_bezier_desc d;
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 4;
+		d.control_points = pts;
+		d.control_point_count = 5;
+		qaws_curve_create_bezier(&d, &ca);
+	}
+
+	/* Curve B: wavy line at z=3, different shape */
+	{
+		qaws_scalar pts[] = {0,1,3, 2,-1,4, 4,2,3, 6,-1,3.5f, 7,0,3};
+		qaws_bezier_desc d;
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 4;
+		d.control_points = pts;
+		d.control_point_count = 5;
+		qaws_curve_create_bezier(&d, &cb);
+	}
+
+	rdesc.curve_a = ca;
+	rdesc.curve_b = cb;
+	if (qaws_surface_create_ruled(&rdesc, &surf) != QAWS_STATUS_OK)
+	{
+		qaws_curve_destroy(ca);
+		qaws_curve_destroy(cb);
+		return;
+	}
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_ruled.obj",
+		OBJ_OUTPUT_DIR "/surface_ruled.mtl"))
+	{
+		qaws_surface_destroy(surf);
+		qaws_curve_destroy(ca);
+		qaws_curve_destroy(cb);
+		return;
+	}
+
+	obj_material(&w, "ruled", 0.9, 0.7, 0.2);
+	obj_material(&w, "edge_a", 1.0, 0.2, 0.2);
+	obj_material(&w, "edge_b", 0.2, 0.2, 1.0);
+
+	obj_group(&w, "ruled_surface");
+	obj_use_material(&w, "ruled");
+	obj_surface_mesh(&w, surf, 40, 20);
+
+	/* Draw boundary curves */
+	obj_group(&w, "curve_a");
+	obj_use_material(&w, "edge_a");
+	obj_curve_polyline(&w, ca, 80);
+
+	obj_group(&w, "curve_b");
+	obj_use_material(&w, "edge_b");
+	obj_curve_polyline(&w, cb, 80);
+
+	obj_close(&w);
+	qaws_surface_destroy(surf);
+	qaws_curve_destroy(ca);
+	qaws_curve_destroy(cb);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_ruled.obj\n");
+}
+
+static void test_obj_surface_swept(void)
+{
+	obj_writer w;
+	qaws_curve* path = NULL;
+	qaws_curve* profile = NULL;
+	qaws_surface* surf = NULL;
+	qaws_surface_swept_desc sdesc;
+
+	printf("test_obj_surface_swept\n");
+
+	/* Path: helix-like 3D curve */
+	{
+		unsigned int i;
+		unsigned int n = 25;
+		qaws_scalar pts[75]; /* 25 * 3 */
+		qaws_scalar der[75];
+		qaws_hermite_desc d;
+		double dt_scale = 4.0 * M_PI / (double)(n - 1);
+		for (i = 0; i < n; i++)
+		{
+			double t = 4.0 * M_PI * (double)i / (double)(n - 1);
+			pts[i * 3 + 0] = (qaws_scalar)(2.0 * cos(t));
+			pts[i * 3 + 1] = (qaws_scalar)(2.0 * sin(t));
+			pts[i * 3 + 2] = (qaws_scalar)(t * 0.3);
+			der[i * 3 + 0] = (qaws_scalar)(-2.0 * sin(t) * dt_scale);
+			der[i * 3 + 1] = (qaws_scalar)(2.0 * cos(t) * dt_scale);
+			der[i * 3 + 2] = (qaws_scalar)(0.3 * dt_scale);
+		}
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_3D;
+		d.degree = 3;
+		d.points = pts;
+		d.derivatives = der;
+		d.point_count = n;
+		d.derivative_count = n;
+		qaws_curve_create_hermite(&d, &path);
+	}
+
+	/* Profile: 5-pointed star cross-section */
+	{
+		unsigned int i;
+		unsigned int n = 11; /* 5 outer + 5 inner + close */
+		qaws_scalar pts[22]; /* 11 * 2 */
+		qaws_scalar der[22];
+		qaws_hermite_desc d;
+		for (i = 0; i < n; i++)
+		{
+			double a = 2.0 * M_PI * (double)i / (double)(n - 1);
+			/* Alternate between outer radius (1.0) and inner radius (0.4) */
+			double r_val = (i % 2 == 0) ? 1.0 : 0.4;
+			double r_next = ((i + 1) % 2 == 0) ? 1.0 : 0.4;
+			double a_next = 2.0 * M_PI * (double)(i + 1) / (double)(n - 1);
+			pts[i * 2 + 0] = (qaws_scalar)(r_val * cos(a));
+			pts[i * 2 + 1] = (qaws_scalar)(r_val * sin(a));
+			/* Derivative: finite difference direction toward next point, scaled */
+			der[i * 2 + 0] = (qaws_scalar)((r_next * cos(a_next) - r_val * cos(a)) * 0.5);
+			der[i * 2 + 1] = (qaws_scalar)((r_next * sin(a_next) - r_val * sin(a)) * 0.5);
+		}
+		memset(&d, 0, sizeof(d));
+		d.dimension = QAWS_DIMENSION_2D;
+		d.degree = 3;
+		d.points = pts;
+		d.derivatives = der;
+		d.point_count = n;
+		d.derivative_count = n;
+		qaws_curve_create_hermite(&d, &profile);
+	}
+
+	memset(&sdesc, 0, sizeof(sdesc));
+	sdesc.path = path;
+	sdesc.profile = profile;
+	sdesc.scale = (qaws_scalar)0.3;
+
+	if (qaws_surface_create_swept(&sdesc, &surf) != QAWS_STATUS_OK)
+	{
+		if (path) qaws_curve_destroy(path);
+		if (profile) qaws_curve_destroy(profile);
+		return;
+	}
+
+	if (!obj_open(&w,
+		OBJ_OUTPUT_DIR "/surface_swept.obj",
+		OBJ_OUTPUT_DIR "/surface_swept.mtl"))
+	{
+		qaws_surface_destroy(surf);
+		qaws_curve_destroy(path);
+		qaws_curve_destroy(profile);
+		return;
+	}
+
+	obj_material(&w, "swept", 0.3, 0.7, 0.9);
+	obj_material(&w, "path_line", 1.0, 0.3, 0.1);
+
+	obj_group(&w, "swept_surface");
+	obj_use_material(&w, "swept");
+	obj_surface_mesh(&w, surf, 120, 24);
+
+	/* Draw path curve as wireframe */
+	obj_group(&w, "path");
+	obj_use_material(&w, "path_line");
+	obj_curve_polyline(&w, path, 200);
+
+	obj_close(&w);
+	qaws_surface_destroy(surf);
+	qaws_curve_destroy(path);
+	qaws_curve_destroy(profile);
+	printf("  -> " OBJ_OUTPUT_DIR "/surface_swept.obj\n");
+}
+
 int main(void)
 {
 	printf("=== Qaws Test Suite ===\n\n");
@@ -11527,6 +13872,34 @@ int main(void)
 	test_svg_clothoid();
 	test_svg_subdivision();
 	test_svg_all_new_families();
+
+	/* Surface unit tests */
+	printf("\n--- Surface Tests ---\n");
+	test_surface_bezier();
+	test_surface_bspline();
+	test_surface_nurbs();
+	test_surface_error_handling();
+	test_surface_ruled();
+	test_surface_swept();
+
+	/* OBJ 3D visual tests */
+	printf("\n--- OBJ 3D Visual Tests ---\n");
+	test_obj_helix();
+	test_obj_trefoil_knot();
+	test_obj_3d_intersection();
+	test_obj_3d_families();
+	test_obj_3d_curvature_comb();
+	test_obj_3d_traversal();
+	test_obj_3d_torus_knot();
+
+	/* OBJ Surface visual tests */
+	printf("\n--- OBJ Surface Visual Tests ---\n");
+	test_obj_surface_bezier();
+	test_obj_surface_bspline();
+	test_obj_surface_nurbs();
+	test_obj_surface_gallery();
+	test_obj_surface_ruled();
+	test_obj_surface_swept();
 
 	printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
 	return g_fail > 0 ? 1 : 0;

@@ -24,5 +24,11 @@
 #include "qaws_operations.h"
 #include "qaws_convert.h"
 #include "qaws_export.h"
+#include "qaws_surface.h"
+#include "qaws_surface_bezier.h"
+#include "qaws_surface_bspline.h"
+#include "qaws_surface_nurbs.h"
+#include "qaws_surface_swept.h"
+#include "qaws_surface_ruled.h"
 
 #endif /* QAWS_H */
