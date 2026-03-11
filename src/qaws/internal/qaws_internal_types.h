@@ -51,6 +51,16 @@ struct qaws_traversal
 	qaws_scalar* table_params;
 	qaws_scalar* table_distances;
 	qaws_scalar current_distance;
+
+	/* Multi-curve chain (NULL for single-curve) */
+	qaws_curve const** chain_curves;
+	unsigned int chain_count;
+	qaws_scalar* chain_param_offsets; /* chain_count + 1: cumulative param offsets */
+
+	/* Custom speed function time-to-distance table */
+	qaws_scalar* custom_time_table;    /* time values */
+	qaws_scalar* custom_dist_table;    /* corresponding distance values */
+	unsigned int custom_table_size;    /* 0 if not used */
 };
 
 /* Family-specific impl structs */
@@ -66,6 +76,7 @@ typedef struct qaws_hermite_impl
 	qaws_scalar* points;
 	qaws_scalar* tangents;
 	unsigned int point_count;
+	qaws_scalar* span_coeffs; /* dim_count * 4 scalars per span: a,b,c,d */
 } qaws_hermite_impl;
 
 typedef struct qaws_catmull_rom_impl
@@ -106,6 +117,7 @@ typedef struct qaws_trajectory_impl
 	qaws_scalar* key_accelerations;
 	unsigned int key_acceleration_count;
 	int closed;
+	qaws_scalar* span_coeffs; /* dim_count * 4 scalars per span: a,b,c,d (in normalized [0,1] local_t) */
 } qaws_trajectory_impl;
 
 typedef struct qaws_yuksel_subcurve

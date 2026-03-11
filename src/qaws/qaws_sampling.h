@@ -39,4 +39,64 @@ qaws_status qaws_curve_sample_eval_3d(
 	unsigned int sample_capacity,
 	unsigned int* out_sample_count);
 
+/* Curvature-weighted sampling: distribute samples proportionally to
+   curvature magnitude so high-curvature regions receive more points. */
+
+qaws_status qaws_curve_sample_curvature_weighted_2d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_vec2* out_positions,
+	unsigned int position_capacity,
+	unsigned int* out_position_count);
+
+qaws_status qaws_curve_sample_curvature_weighted_3d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_vec3* out_positions,
+	unsigned int position_capacity,
+	unsigned int* out_position_count);
+
+/* Feature-preserving sampling: inserts inflection points and extrema
+   into a uniform parameter sample set. */
+
+qaws_status qaws_curve_sample_feature_preserving_2d(
+	qaws_curve const* curve,
+	unsigned int base_sample_count,
+	qaws_vec2* out_positions,
+	unsigned int position_capacity,
+	unsigned int* out_position_count);
+
+qaws_status qaws_curve_sample_feature_preserving_3d(
+	qaws_curve const* curve,
+	unsigned int base_sample_count,
+	qaws_vec3* out_positions,
+	unsigned int position_capacity,
+	unsigned int* out_position_count);
+
+/* Streaming / callback-based sampling.
+   The callback is invoked for each sample point.  Return non-zero from
+   the callback to continue, or 0 to stop early (not an error). */
+
+typedef int (*qaws_sample_callback_2d)(
+	qaws_scalar parameter,
+	qaws_vec2 const* position,
+	void* user_data);
+
+typedef int (*qaws_sample_callback_3d)(
+	qaws_scalar parameter,
+	qaws_vec3 const* position,
+	void* user_data);
+
+qaws_status qaws_curve_sample_streaming_2d(
+	qaws_curve const* curve,
+	qaws_sampling_desc const* desc,
+	qaws_sample_callback_2d callback,
+	void* user_data);
+
+qaws_status qaws_curve_sample_streaming_3d(
+	qaws_curve const* curve,
+	qaws_sampling_desc const* desc,
+	qaws_sample_callback_3d callback,
+	void* user_data);
+
 #endif /* QAWS_SAMPLING_H */

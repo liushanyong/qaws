@@ -93,6 +93,93 @@ qaws_status qaws_curve_compute_frenet_frame_3d(
 	qaws_vec3* out_normal,
 	qaws_vec3* out_binormal);
 
+/* Inflection point detection */
+qaws_status qaws_curve_find_inflection_points(
+	qaws_curve const* curve,
+	qaws_scalar* out_parameters,
+	unsigned int parameter_capacity,
+	unsigned int* out_count);
+
+/* Extrema detection */
+qaws_status qaws_curve_find_extrema(
+	qaws_curve const* curve,
+	unsigned int axis,
+	qaws_scalar* out_parameters,
+	unsigned int parameter_capacity,
+	unsigned int* out_count);
+
+/* Curvature comb data */
+typedef struct qaws_curvature_sample_2d {
+	qaws_vec2 position;
+	qaws_scalar curvature;
+	qaws_vec2 normal;
+} qaws_curvature_sample_2d;
+
+typedef struct qaws_curvature_sample_3d {
+	qaws_vec3 position;
+	qaws_scalar curvature;
+	qaws_vec3 normal;
+} qaws_curvature_sample_3d;
+
+qaws_status qaws_curve_compute_curvature_comb_2d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_curvature_sample_2d* out_samples,
+	unsigned int sample_capacity);
+
+qaws_status qaws_curve_compute_curvature_comb_3d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_curvature_sample_3d* out_samples,
+	unsigned int sample_capacity);
+
+/* Winding number */
+qaws_status qaws_curve_compute_winding_number_2d(
+	qaws_curve const* curve,
+	qaws_vec2 point,
+	int* out_winding_number);
+
+/* Intersection results */
+typedef struct qaws_intersection_2d {
+	qaws_scalar parameter_a;
+	qaws_scalar parameter_b;
+	qaws_vec2 position;
+} qaws_intersection_2d;
+
+typedef struct qaws_intersection_3d {
+	qaws_scalar parameter_a;
+	qaws_scalar parameter_b;
+	qaws_vec3 position;
+} qaws_intersection_3d;
+
+/* Self-intersection detection */
+qaws_status qaws_curve_find_self_intersections_2d(
+	qaws_curve const* curve,
+	qaws_intersection_2d* out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int* out_count);
+
+qaws_status qaws_curve_find_self_intersections_3d(
+	qaws_curve const* curve,
+	qaws_intersection_3d* out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int* out_count);
+
+/* Curve-curve intersection */
+qaws_status qaws_curve_find_intersections_2d(
+	qaws_curve const* curve_a,
+	qaws_curve const* curve_b,
+	qaws_intersection_2d* out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int* out_count);
+
+qaws_status qaws_curve_find_intersections_3d(
+	qaws_curve const* curve_a,
+	qaws_curve const* curve_b,
+	qaws_intersection_3d* out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int* out_count);
+
 /* Family-specific inspection */
 qaws_status qaws_bezier_get_control_points(
 	qaws_curve const* curve,

@@ -15,6 +15,12 @@ qaws_status qaws_traversal_create(
 	qaws_traversal_desc const* desc,
 	qaws_traversal** out_traversal);
 
+qaws_status qaws_traversal_create_multi(
+	qaws_curve const* const* curves,
+	unsigned int curve_count,
+	qaws_traversal_desc const* desc,
+	qaws_traversal** out_traversal);
+
 void qaws_traversal_destroy(qaws_traversal* traversal);
 
 qaws_status qaws_traversal_evaluate_2d(

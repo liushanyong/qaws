@@ -942,3 +942,1315 @@ qaws_status qaws_curve_compute_frenet_frame_3d(
 
 	return QAWS_STATUS_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Inflection point detection                                         */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_find_inflection_points(
+	qaws_curve const *curve,
+	qaws_scalar *out_parameters,
+	unsigned int parameter_capacity,
+	unsigned int *out_count)
+{
+	unsigned int span_count;
+	unsigned int samples_per_span;
+	unsigned int total_samples;
+	unsigned int found;
+	unsigned int i;
+	qaws_scalar range_min;
+	qaws_scalar range_max;
+	qaws_scalar prev_val;
+	qaws_scalar prev_t;
+
+	if (!curve || !out_parameters || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	*out_count = 0;
+	found = 0;
+
+	span_count = curve->span_count;
+	if (span_count == 0)
+		span_count = 1;
+	samples_per_span = 32;
+	total_samples = span_count * samples_per_span;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	if (curve->dimension == QAWS_DIMENSION_2D)
+	{
+		qaws_eval_result_2d result;
+		qaws_status status;
+		qaws_scalar t;
+		qaws_scalar val;
+
+		/* Evaluate first sample */
+		status = qaws_curve_evaluate_2d(
+			curve, range_min,
+			QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		prev_val = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+		prev_t = range_min;
+
+		for (i = 1; i <= total_samples; ++i)
+		{
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)total_samples;
+
+			status = qaws_curve_evaluate_2d(
+				curve, t,
+				QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			val = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+
+			/* Sign change detected - bisect */
+			if ((prev_val > (qaws_scalar)0.0 && val < (qaws_scalar)0.0) ||
+				(prev_val < (qaws_scalar)0.0 && val > (qaws_scalar)0.0))
+			{
+				qaws_scalar lo = prev_t;
+				qaws_scalar hi = t;
+				qaws_scalar lo_val = prev_val;
+				qaws_scalar mid;
+				qaws_scalar mid_val;
+				unsigned int iter;
+
+				for (iter = 0; iter < 32; ++iter)
+				{
+					mid = (lo + hi) * (qaws_scalar)0.5;
+					if ((hi - lo) < (qaws_scalar)1.0e-12)
+						break;
+
+					status = qaws_curve_evaluate_2d(
+						curve, mid,
+						QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+					if (status != QAWS_STATUS_OK)
+						return status;
+
+					mid_val = result.d1.x * result.d2.y
+						- result.d1.y * result.d2.x;
+
+					if ((lo_val > (qaws_scalar)0.0 && mid_val > (qaws_scalar)0.0) ||
+						(lo_val < (qaws_scalar)0.0 && mid_val < (qaws_scalar)0.0))
+					{
+						lo = mid;
+						lo_val = mid_val;
+					}
+					else
+					{
+						hi = mid;
+					}
+				}
+
+				mid = (lo + hi) * (qaws_scalar)0.5;
+				if (found < parameter_capacity)
+					out_parameters[found] = mid;
+				++found;
+			}
+
+			prev_val = val;
+			prev_t = t;
+		}
+	}
+	else if (curve->dimension == QAWS_DIMENSION_3D)
+	{
+		qaws_eval_result_3d result;
+		qaws_status status;
+		qaws_scalar t;
+		qaws_scalar cx, cy, cz;
+		qaws_scalar val;
+		qaws_scalar prev_mag;
+
+		/* Evaluate first sample */
+		status = qaws_curve_evaluate_3d(
+			curve, range_min,
+			QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+		cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+		cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+		prev_mag = (qaws_scalar)sqrt((double)(cx * cx + cy * cy + cz * cz));
+		prev_t = range_min;
+
+		for (i = 1; i <= total_samples; ++i)
+		{
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)total_samples;
+
+			status = qaws_curve_evaluate_3d(
+				curve, t,
+				QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+			cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+			cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+			val = (qaws_scalar)sqrt((double)(cx * cx + cy * cy + cz * cz));
+
+			/*
+			 * For 3D, detect when magnitude approaches zero.
+			 * If one side is above tolerance and the other is below,
+			 * or if both bracket a minimum near zero, bisect.
+			 */
+			if ((prev_mag > (qaws_scalar)1.0e-12 && val < (qaws_scalar)1.0e-12) ||
+				(prev_mag < (qaws_scalar)1.0e-12 && val > (qaws_scalar)1.0e-12))
+			{
+				qaws_scalar lo = prev_t;
+				qaws_scalar hi = t;
+				qaws_scalar mid;
+				qaws_scalar mid_mag;
+				unsigned int iter;
+
+				for (iter = 0; iter < 32; ++iter)
+				{
+					mid = (lo + hi) * (qaws_scalar)0.5;
+					if ((hi - lo) < (qaws_scalar)1.0e-12)
+						break;
+
+					status = qaws_curve_evaluate_3d(
+						curve, mid,
+						QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &result);
+					if (status != QAWS_STATUS_OK)
+						return status;
+
+					cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+					cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+					cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+					mid_mag = (qaws_scalar)sqrt(
+						(double)(cx * cx + cy * cy + cz * cz));
+
+					if (mid_mag < (qaws_scalar)1.0e-12)
+					{
+						/* Found the zero region */
+						break;
+					}
+
+					/* Bisect toward the side with smaller magnitude */
+					if (prev_mag < val)
+						hi = mid;
+					else
+						lo = mid;
+				}
+
+				mid = (lo + hi) * (qaws_scalar)0.5;
+				if (found < parameter_capacity)
+					out_parameters[found] = mid;
+				++found;
+			}
+
+			prev_mag = val;
+			prev_t = t;
+		}
+	}
+	else
+	{
+		return QAWS_STATUS_INVALID_DIMENSION;
+	}
+
+	*out_count = found;
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Extrema detection                                                  */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_find_extrema(
+	qaws_curve const *curve,
+	unsigned int axis,
+	qaws_scalar *out_parameters,
+	unsigned int parameter_capacity,
+	unsigned int *out_count)
+{
+	unsigned int span_count;
+	unsigned int samples_per_span;
+	unsigned int total_samples;
+	unsigned int found;
+	unsigned int i;
+	qaws_scalar range_min;
+	qaws_scalar range_max;
+	qaws_scalar prev_val;
+	qaws_scalar prev_t;
+
+	if (!curve || !out_parameters || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (axis >= (unsigned int)curve->dimension)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	*out_count = 0;
+	found = 0;
+
+	span_count = curve->span_count;
+	if (span_count == 0)
+		span_count = 1;
+	samples_per_span = 32;
+	total_samples = span_count * samples_per_span;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	if (curve->dimension == QAWS_DIMENSION_2D)
+	{
+		qaws_eval_result_2d result;
+		qaws_status status;
+		qaws_scalar t;
+		qaws_scalar val;
+
+		/* Evaluate first sample */
+		status = qaws_curve_evaluate_2d(
+			curve, range_min, QAWS_EVAL_FLAG_D1, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		prev_val = (axis == 0) ? result.d1.x : result.d1.y;
+		prev_t = range_min;
+
+		for (i = 1; i <= total_samples; ++i)
+		{
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)total_samples;
+
+			status = qaws_curve_evaluate_2d(
+				curve, t, QAWS_EVAL_FLAG_D1, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			val = (axis == 0) ? result.d1.x : result.d1.y;
+
+			/* Sign change detected - bisect */
+			if ((prev_val > (qaws_scalar)0.0 && val < (qaws_scalar)0.0) ||
+				(prev_val < (qaws_scalar)0.0 && val > (qaws_scalar)0.0))
+			{
+				qaws_scalar lo = prev_t;
+				qaws_scalar hi = t;
+				qaws_scalar lo_val = prev_val;
+				qaws_scalar mid;
+				qaws_scalar mid_val;
+				unsigned int iter;
+
+				for (iter = 0; iter < 32; ++iter)
+				{
+					mid = (lo + hi) * (qaws_scalar)0.5;
+					if ((hi - lo) < (qaws_scalar)1.0e-12)
+						break;
+
+					status = qaws_curve_evaluate_2d(
+						curve, mid, QAWS_EVAL_FLAG_D1, &result);
+					if (status != QAWS_STATUS_OK)
+						return status;
+
+					mid_val = (axis == 0) ? result.d1.x : result.d1.y;
+
+					if ((lo_val > (qaws_scalar)0.0 && mid_val > (qaws_scalar)0.0) ||
+						(lo_val < (qaws_scalar)0.0 && mid_val < (qaws_scalar)0.0))
+					{
+						lo = mid;
+						lo_val = mid_val;
+					}
+					else
+					{
+						hi = mid;
+					}
+				}
+
+				mid = (lo + hi) * (qaws_scalar)0.5;
+				if (found < parameter_capacity)
+					out_parameters[found] = mid;
+				++found;
+			}
+
+			prev_val = val;
+			prev_t = t;
+		}
+	}
+	else if (curve->dimension == QAWS_DIMENSION_3D)
+	{
+		qaws_eval_result_3d result;
+		qaws_status status;
+		qaws_scalar t;
+		qaws_scalar val;
+
+		/* Evaluate first sample */
+		status = qaws_curve_evaluate_3d(
+			curve, range_min, QAWS_EVAL_FLAG_D1, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		if (axis == 0) prev_val = result.d1.x;
+		else if (axis == 1) prev_val = result.d1.y;
+		else prev_val = result.d1.z;
+		prev_t = range_min;
+
+		for (i = 1; i <= total_samples; ++i)
+		{
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)total_samples;
+
+			status = qaws_curve_evaluate_3d(
+				curve, t, QAWS_EVAL_FLAG_D1, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			if (axis == 0) val = result.d1.x;
+			else if (axis == 1) val = result.d1.y;
+			else val = result.d1.z;
+
+			/* Sign change detected - bisect */
+			if ((prev_val > (qaws_scalar)0.0 && val < (qaws_scalar)0.0) ||
+				(prev_val < (qaws_scalar)0.0 && val > (qaws_scalar)0.0))
+			{
+				qaws_scalar lo = prev_t;
+				qaws_scalar hi = t;
+				qaws_scalar lo_val = prev_val;
+				qaws_scalar mid;
+				qaws_scalar mid_val;
+				unsigned int iter;
+
+				for (iter = 0; iter < 32; ++iter)
+				{
+					mid = (lo + hi) * (qaws_scalar)0.5;
+					if ((hi - lo) < (qaws_scalar)1.0e-12)
+						break;
+
+					status = qaws_curve_evaluate_3d(
+						curve, mid, QAWS_EVAL_FLAG_D1, &result);
+					if (status != QAWS_STATUS_OK)
+						return status;
+
+					if (axis == 0) mid_val = result.d1.x;
+					else if (axis == 1) mid_val = result.d1.y;
+					else mid_val = result.d1.z;
+
+					if ((lo_val > (qaws_scalar)0.0 && mid_val > (qaws_scalar)0.0) ||
+						(lo_val < (qaws_scalar)0.0 && mid_val < (qaws_scalar)0.0))
+					{
+						lo = mid;
+						lo_val = mid_val;
+					}
+					else
+					{
+						hi = mid;
+					}
+				}
+
+				mid = (lo + hi) * (qaws_scalar)0.5;
+				if (found < parameter_capacity)
+					out_parameters[found] = mid;
+				++found;
+			}
+
+			prev_val = val;
+			prev_t = t;
+		}
+	}
+	else
+	{
+		return QAWS_STATUS_INVALID_DIMENSION;
+	}
+
+	*out_count = found;
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Curvature comb data                                                */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_compute_curvature_comb_2d(
+	qaws_curve const *curve,
+	unsigned int sample_count,
+	qaws_curvature_sample_2d *out_samples,
+	unsigned int sample_capacity)
+{
+	unsigned int i;
+	qaws_scalar range_min;
+	qaws_scalar range_max;
+	qaws_scalar t;
+	qaws_eval_result_2d result;
+	qaws_status status;
+	qaws_scalar speed;
+	qaws_scalar cross;
+	qaws_scalar len;
+
+	if (!curve || !out_samples)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (sample_capacity < sample_count)
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	for (i = 0; i < sample_count; ++i)
+	{
+		t = range_min + (qaws_scalar)i * (range_max - range_min)
+			/ (qaws_scalar)(sample_count - 1);
+
+		status = qaws_curve_evaluate_2d(
+			curve, t,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2,
+			&result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		out_samples[i].position = result.position;
+
+		/* Curvature: (d1.x * d2.y - d1.y * d2.x) / |d1|^3 */
+		speed = (qaws_scalar)sqrt((double)(
+			result.d1.x * result.d1.x + result.d1.y * result.d1.y));
+
+		if (speed < (qaws_scalar)1.0e-12)
+		{
+			out_samples[i].curvature = (qaws_scalar)0.0;
+			out_samples[i].normal.x = (qaws_scalar)0.0;
+			out_samples[i].normal.y = (qaws_scalar)0.0;
+			continue;
+		}
+
+		cross = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+		out_samples[i].curvature = cross / (speed * speed * speed);
+
+		/* Normal: rotate unit tangent 90 degrees CCW */
+		len = speed;
+		out_samples[i].normal.x = -result.d1.y / len;
+		out_samples[i].normal.y =  result.d1.x / len;
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_compute_curvature_comb_3d(
+	qaws_curve const *curve,
+	unsigned int sample_count,
+	qaws_curvature_sample_3d *out_samples,
+	unsigned int sample_capacity)
+{
+	unsigned int i;
+	qaws_scalar range_min;
+	qaws_scalar range_max;
+	qaws_scalar t;
+	qaws_eval_result_3d result;
+	qaws_status status;
+	qaws_scalar speed;
+	qaws_scalar cx, cy, cz;
+	qaws_scalar cross_len;
+	qaws_scalar d1_len;
+	qaws_scalar tx, ty, tz;
+	qaws_scalar bx, by, bz;
+	qaws_scalar b_len;
+	qaws_scalar ax, ay, az;
+
+	if (!curve || !out_samples)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (sample_capacity < sample_count)
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	for (i = 0; i < sample_count; ++i)
+	{
+		t = range_min + (qaws_scalar)i * (range_max - range_min)
+			/ (qaws_scalar)(sample_count - 1);
+
+		status = qaws_curve_evaluate_3d(
+			curve, t,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2,
+			&result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		out_samples[i].position = result.position;
+
+		/* Curvature: |d1 x d2| / |d1|^3 */
+		speed = (qaws_scalar)sqrt((double)(
+			result.d1.x * result.d1.x +
+			result.d1.y * result.d1.y +
+			result.d1.z * result.d1.z));
+
+		if (speed < (qaws_scalar)1.0e-12)
+		{
+			out_samples[i].curvature = (qaws_scalar)0.0;
+			out_samples[i].normal.x = (qaws_scalar)0.0;
+			out_samples[i].normal.y = (qaws_scalar)0.0;
+			out_samples[i].normal.z = (qaws_scalar)0.0;
+			continue;
+		}
+
+		cx = result.d1.y * result.d2.z - result.d1.z * result.d2.y;
+		cy = result.d1.z * result.d2.x - result.d1.x * result.d2.z;
+		cz = result.d1.x * result.d2.y - result.d1.y * result.d2.x;
+		cross_len = (qaws_scalar)sqrt(
+			(double)(cx * cx + cy * cy + cz * cz));
+
+		out_samples[i].curvature = cross_len / (speed * speed * speed);
+
+		/* Normal from Frenet frame: N = B x T where B = normalize(D1 x D2) */
+		d1_len = speed;
+		tx = result.d1.x / d1_len;
+		ty = result.d1.y / d1_len;
+		tz = result.d1.z / d1_len;
+
+		b_len = cross_len;
+
+		if (b_len < (qaws_scalar)1.0e-12)
+		{
+			/* Degenerate: pick arbitrary perpendicular normal */
+			ax = (qaws_scalar)0.0;
+			ay = (qaws_scalar)0.0;
+			az = (qaws_scalar)0.0;
+
+			if (tx * tx <= ty * ty && tx * tx <= tz * tz)
+				ax = (qaws_scalar)1.0;
+			else if (ty * ty <= tz * tz)
+				ay = (qaws_scalar)1.0;
+			else
+				az = (qaws_scalar)1.0;
+
+			bx = ty * az - tz * ay;
+			by = tz * ax - tx * az;
+			bz = tx * ay - ty * ax;
+			b_len = (qaws_scalar)sqrt(
+				(double)(bx * bx + by * by + bz * bz));
+
+			bx /= b_len;
+			by /= b_len;
+			bz /= b_len;
+		}
+		else
+		{
+			bx = cx / b_len;
+			by = cy / b_len;
+			bz = cz / b_len;
+		}
+
+		/* N = B x T */
+		out_samples[i].normal.x = by * tz - bz * ty;
+		out_samples[i].normal.y = bz * tx - bx * tz;
+		out_samples[i].normal.z = bx * ty - by * tx;
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Winding number                                                     */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_compute_winding_number_2d(
+	qaws_curve const *curve,
+	qaws_vec2 point,
+	int *out_winding_number)
+{
+	unsigned int sample_count;
+	unsigned int i;
+	qaws_scalar range_min;
+	qaws_scalar range_max;
+	qaws_scalar t;
+	qaws_scalar angle_sum;
+	qaws_scalar prev_dx;
+	qaws_scalar prev_dy;
+	qaws_scalar curr_dx;
+	qaws_scalar curr_dy;
+	qaws_scalar cross_val;
+	qaws_scalar dot_val;
+	qaws_scalar delta_angle;
+	qaws_eval_result_2d result;
+	qaws_status status;
+	double pi2;
+
+	if (!curve || !out_winding_number)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (!qaws_curve_is_closed(curve))
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	sample_count = 256;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	/* Evaluate first sample */
+	status = qaws_curve_evaluate_2d(
+		curve, range_min, QAWS_EVAL_FLAG_POSITION, &result);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	prev_dx = result.position.x - point.x;
+	prev_dy = result.position.y - point.y;
+	angle_sum = (qaws_scalar)0.0;
+
+	for (i = 1; i <= sample_count; ++i)
+	{
+		t = range_min + (qaws_scalar)i * (range_max - range_min)
+			/ (qaws_scalar)sample_count;
+
+		status = qaws_curve_evaluate_2d(
+			curve, t, QAWS_EVAL_FLAG_POSITION, &result);
+		if (status != QAWS_STATUS_OK)
+			return status;
+
+		curr_dx = result.position.x - point.x;
+		curr_dy = result.position.y - point.y;
+
+		cross_val = prev_dx * curr_dy - prev_dy * curr_dx;
+		dot_val = prev_dx * curr_dx + prev_dy * curr_dy;
+		delta_angle = (qaws_scalar)atan2((double)cross_val, (double)dot_val);
+
+		angle_sum += delta_angle;
+
+		prev_dx = curr_dx;
+		prev_dy = curr_dy;
+	}
+
+	/* Divide by 2*pi and round to nearest integer */
+	pi2 = 6.283185307179586476925286766559;
+	*out_winding_number = (int)floor((double)angle_sum / pi2 + 0.5);
+
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Intersection detection via sampling + Newton refinement            */
+/* ------------------------------------------------------------------ */
+
+#define ISECT_SAMPLE_COUNT   256
+#define ISECT_NEWTON_ITERS   20
+#define ISECT_DEDUP_TOLERANCE ((qaws_scalar)1.0e-6)
+
+#if QAWS_SCALAR_IS_FLOAT
+#define ISECT_POS_TOLERANCE  ((qaws_scalar)1.0e-3f)
+#define ISECT_CONVERGE_TOL   ((qaws_scalar)1.0e-5f)
+#else
+#define ISECT_POS_TOLERANCE  ((qaws_scalar)1.0e-6)
+#define ISECT_CONVERGE_TOL   ((qaws_scalar)1.0e-10)
+#endif
+
+/* Deduplication helper */
+static int isect_2d_is_duplicate(
+	qaws_intersection_2d const *buf, unsigned int count, unsigned int capacity,
+	qaws_scalar ta, qaws_scalar tb)
+{
+	unsigned int i;
+	unsigned int check = count < capacity ? count : capacity;
+	for (i = 0; i < check; ++i)
+	{
+		qaws_scalar da = buf[i].parameter_a - ta;
+		qaws_scalar db = buf[i].parameter_b - tb;
+		if (da < 0) da = -da;
+		if (db < 0) db = -db;
+		if (da < ISECT_DEDUP_TOLERANCE && db < ISECT_DEDUP_TOLERANCE)
+			return 1;
+	}
+	return 0;
+}
+
+static int isect_3d_is_duplicate(
+	qaws_intersection_3d const *buf, unsigned int count, unsigned int capacity,
+	qaws_scalar ta, qaws_scalar tb)
+{
+	unsigned int i;
+	unsigned int check = count < capacity ? count : capacity;
+	for (i = 0; i < check; ++i)
+	{
+		qaws_scalar da = buf[i].parameter_a - ta;
+		qaws_scalar db = buf[i].parameter_b - tb;
+		if (da < 0) da = -da;
+		if (db < 0) db = -db;
+		if (da < ISECT_DEDUP_TOLERANCE && db < ISECT_DEDUP_TOLERANCE)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Newton-Raphson refinement for 2D curve-curve intersection.
+ * Solves C_a(ta) - C_b(tb) = 0 using the 2x2 Jacobian [C_a', -C_b'].
+ * Returns 1 if converged, 0 otherwise. ta/tb are updated in place.
+ */
+static int newton_refine_2d(
+	qaws_curve const *curve_a,
+	qaws_curve const *curve_b,
+	qaws_scalar *ta, qaws_scalar *tb,
+	qaws_scalar a_min, qaws_scalar a_max,
+	qaws_scalar b_min, qaws_scalar b_max)
+{
+	unsigned int iter;
+	for (iter = 0; iter < ISECT_NEWTON_ITERS; ++iter)
+	{
+		qaws_eval_result_2d ra, rb;
+		qaws_scalar fx, fy;
+		qaws_scalar j00, j01, j10, j11;
+		qaws_scalar det, inv_det;
+		qaws_scalar dta, dtb;
+
+		if (qaws_curve_evaluate_2d(curve_a, *ta,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &ra) != QAWS_STATUS_OK)
+			return 0;
+		if (qaws_curve_evaluate_2d(curve_b, *tb,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &rb) != QAWS_STATUS_OK)
+			return 0;
+
+		fx = ra.position.x - rb.position.x;
+		fy = ra.position.y - rb.position.y;
+
+		if (fx < 0) { if (-fx < ISECT_CONVERGE_TOL && (fy < 0 ? -fy : fy) < ISECT_CONVERGE_TOL) return 1; }
+		else        { if ( fx < ISECT_CONVERGE_TOL && (fy < 0 ? -fy : fy) < ISECT_CONVERGE_TOL) return 1; }
+
+		/* Jacobian: [da.x, -db.x; da.y, -db.y] */
+		j00 = ra.d1.x;  j01 = -rb.d1.x;
+		j10 = ra.d1.y;  j11 = -rb.d1.y;
+
+		det = j00 * j11 - j01 * j10;
+		if (det < 0) det = -det;
+		if (det < (qaws_scalar)1.0e-30)
+			return 0;
+
+		det = j00 * j11 - j01 * j10;
+		inv_det = (qaws_scalar)1.0 / det;
+
+		dta = ( j11 * fx - j01 * fy) * inv_det;
+		dtb = (-j10 * fx + j00 * fy) * inv_det;
+
+		*ta -= dta;
+		*tb -= dtb;
+
+		/* Clamp to domain */
+		if (*ta < a_min) *ta = a_min;
+		if (*ta > a_max) *ta = a_max;
+		if (*tb < b_min) *tb = b_min;
+		if (*tb > b_max) *tb = b_max;
+	}
+
+	/* Check final residual */
+	{
+		qaws_eval_result_2d ra, rb;
+		qaws_scalar dx, dy;
+		if (qaws_curve_evaluate_2d(curve_a, *ta, QAWS_EVAL_FLAG_POSITION, &ra) != QAWS_STATUS_OK)
+			return 0;
+		if (qaws_curve_evaluate_2d(curve_b, *tb, QAWS_EVAL_FLAG_POSITION, &rb) != QAWS_STATUS_OK)
+			return 0;
+		dx = ra.position.x - rb.position.x;
+		dy = ra.position.y - rb.position.y;
+		if (dx < 0) dx = -dx;
+		if (dy < 0) dy = -dy;
+		return (dx < ISECT_POS_TOLERANCE && dy < ISECT_POS_TOLERANCE) ? 1 : 0;
+	}
+}
+
+static int newton_refine_3d(
+	qaws_curve const *curve_a,
+	qaws_curve const *curve_b,
+	qaws_scalar *ta, qaws_scalar *tb,
+	qaws_scalar a_min, qaws_scalar a_max,
+	qaws_scalar b_min, qaws_scalar b_max)
+{
+	unsigned int iter;
+	for (iter = 0; iter < ISECT_NEWTON_ITERS; ++iter)
+	{
+		qaws_eval_result_3d ra, rb;
+		qaws_scalar fx, fy, fz;
+		qaws_scalar ax, ay, az, bx, by, bz;
+		qaws_scalar ata, atb, dta, dtb;
+
+		if (qaws_curve_evaluate_3d(curve_a, *ta,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &ra) != QAWS_STATUS_OK)
+			return 0;
+		if (qaws_curve_evaluate_3d(curve_b, *tb,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &rb) != QAWS_STATUS_OK)
+			return 0;
+
+		fx = ra.position.x - rb.position.x;
+		fy = ra.position.y - rb.position.y;
+		fz = ra.position.z - rb.position.z;
+
+		{
+			qaws_scalar afx = fx < 0 ? -fx : fx;
+			qaws_scalar afy = fy < 0 ? -fy : fy;
+			qaws_scalar afz = fz < 0 ? -fz : fz;
+			if (afx < ISECT_CONVERGE_TOL && afy < ISECT_CONVERGE_TOL
+				&& afz < ISECT_CONVERGE_TOL)
+				return 1;
+		}
+
+		/* 3D overdetermined: least-squares via normal equations
+		   J = [da, -db] (3x2), solve J^T J [dta;dtb] = J^T f */
+		ax = ra.d1.x; ay = ra.d1.y; az = ra.d1.z;
+		bx = -rb.d1.x; by = -rb.d1.y; bz = -rb.d1.z;
+
+		ata = ax * ax + ay * ay + az * az;
+		atb = ax * bx + ay * by + az * bz;
+		{
+			qaws_scalar btb = bx * bx + by * by + bz * bz;
+			qaws_scalar rhs_a = ax * fx + ay * fy + az * fz;
+			qaws_scalar rhs_b = bx * fx + by * fy + bz * fz;
+			qaws_scalar det = ata * btb - atb * atb;
+			qaws_scalar abs_det = det < 0 ? -det : det;
+			qaws_scalar inv_det;
+
+			if (abs_det < (qaws_scalar)1.0e-30)
+				return 0;
+
+			inv_det = (qaws_scalar)1.0 / det;
+			dta = ( btb * rhs_a - atb * rhs_b) * inv_det;
+			dtb = (-atb * rhs_a + ata * rhs_b) * inv_det;
+		}
+
+		*ta -= dta;
+		*tb -= dtb;
+
+		if (*ta < a_min) *ta = a_min;
+		if (*ta > a_max) *ta = a_max;
+		if (*tb < b_min) *tb = b_min;
+		if (*tb > b_max) *tb = b_max;
+	}
+
+	{
+		qaws_eval_result_3d ra, rb;
+		qaws_scalar dx, dy, dz;
+		if (qaws_curve_evaluate_3d(curve_a, *ta, QAWS_EVAL_FLAG_POSITION, &ra) != QAWS_STATUS_OK)
+			return 0;
+		if (qaws_curve_evaluate_3d(curve_b, *tb, QAWS_EVAL_FLAG_POSITION, &rb) != QAWS_STATUS_OK)
+			return 0;
+		dx = ra.position.x - rb.position.x;
+		dy = ra.position.y - rb.position.y;
+		dz = ra.position.z - rb.position.z;
+		if (dx < 0) dx = -dx;
+		if (dy < 0) dy = -dy;
+		if (dz < 0) dz = -dz;
+		return (dx < ISECT_POS_TOLERANCE && dy < ISECT_POS_TOLERANCE
+			&& dz < ISECT_POS_TOLERANCE) ? 1 : 0;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/*  Self-intersection detection                                        */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_find_self_intersections_2d(
+	qaws_curve const *curve,
+	qaws_intersection_2d *out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int *out_count)
+{
+	unsigned int i, j, n, found;
+	qaws_scalar range_min, range_max;
+	qaws_scalar *params = NULL;
+	qaws_vec2 *pts = NULL;
+	qaws_status s;
+
+	if (!curve || !out_intersections || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	*out_count = 0;
+	found = 0;
+
+	n = ISECT_SAMPLE_COUNT;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	params = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	pts = (qaws_vec2 *)malloc(n * sizeof(qaws_vec2));
+	if (!params || !pts) { free(params); free(pts); return QAWS_STATUS_ALLOCATION_FAILURE; }
+
+	/* Dense sampling */
+	for (i = 0; i < n; ++i)
+	{
+		qaws_eval_result_2d r;
+		params[i] = range_min + (qaws_scalar)i * (range_max - range_min) / (qaws_scalar)(n - 1);
+		s = qaws_curve_evaluate_2d(curve, params[i], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) { free(params); free(pts); return s; }
+		pts[i] = r.position;
+	}
+
+	/* Find candidate pairs: samples far apart in parameter but close in position.
+	   Minimum index gap to avoid trivial near-neighbors. */
+	{
+		unsigned int min_gap = n / 8;
+		if (min_gap < 4) min_gap = 4;
+
+		for (i = 0; i < n; ++i)
+		{
+			for (j = i + min_gap; j < n; ++j)
+			{
+				qaws_scalar dx = pts[i].x - pts[j].x;
+				qaws_scalar dy = pts[i].y - pts[j].y;
+				qaws_scalar dist2;
+				if (dx < 0) dx = -dx;
+				if (dy < 0) dy = -dy;
+
+				/* Coarse distance threshold: ~2x the sampling chord length */
+				dist2 = dx * dx + dy * dy;
+				if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+					continue;
+
+				/* Newton refinement */
+				{
+					qaws_scalar ta = params[i];
+					qaws_scalar tb = params[j];
+
+					if (newton_refine_2d(curve, curve, &ta, &tb,
+						range_min, range_max, range_min, range_max))
+					{
+						/* Ensure ta < tb for self-intersection */
+						if (ta > tb)
+						{
+							qaws_scalar tmp = ta; ta = tb; tb = tmp;
+						}
+						/* Parameter gap must be significant (not a trivial point) */
+						if ((tb - ta) > ISECT_DEDUP_TOLERANCE * (qaws_scalar)10.0)
+						{
+							if (!isect_2d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
+							{
+								if (found < intersection_capacity)
+								{
+									qaws_eval_result_2d rp;
+									qaws_curve_evaluate_2d(curve, ta,
+										QAWS_EVAL_FLAG_POSITION, &rp);
+									out_intersections[found].parameter_a = ta;
+									out_intersections[found].parameter_b = tb;
+									out_intersections[found].position = rp.position;
+								}
+								++found;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	free(params);
+	free(pts);
+	*out_count = found;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_find_self_intersections_3d(
+	qaws_curve const *curve,
+	qaws_intersection_3d *out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int *out_count)
+{
+	unsigned int i, j, n, found;
+	qaws_scalar range_min, range_max;
+	qaws_scalar *params = NULL;
+	qaws_vec3 *pts = NULL;
+	qaws_status s;
+
+	if (!curve || !out_intersections || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	*out_count = 0;
+	found = 0;
+
+	n = ISECT_SAMPLE_COUNT;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	params = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	pts = (qaws_vec3 *)malloc(n * sizeof(qaws_vec3));
+	if (!params || !pts) { free(params); free(pts); return QAWS_STATUS_ALLOCATION_FAILURE; }
+
+	for (i = 0; i < n; ++i)
+	{
+		qaws_eval_result_3d r;
+		params[i] = range_min + (qaws_scalar)i * (range_max - range_min) / (qaws_scalar)(n - 1);
+		s = qaws_curve_evaluate_3d(curve, params[i], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) { free(params); free(pts); return s; }
+		pts[i] = r.position;
+	}
+
+	{
+		unsigned int min_gap = n / 8;
+		if (min_gap < 4) min_gap = 4;
+
+		for (i = 0; i < n; ++i)
+		{
+			for (j = i + min_gap; j < n; ++j)
+			{
+				qaws_scalar dx = pts[i].x - pts[j].x;
+				qaws_scalar dy = pts[i].y - pts[j].y;
+				qaws_scalar dz = pts[i].z - pts[j].z;
+				qaws_scalar dist2;
+
+				dist2 = dx * dx + dy * dy + dz * dz;
+				if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+					continue;
+
+				{
+					qaws_scalar ta = params[i];
+					qaws_scalar tb = params[j];
+
+					if (newton_refine_3d(curve, curve, &ta, &tb,
+						range_min, range_max, range_min, range_max))
+					{
+						if (ta > tb)
+						{
+							qaws_scalar tmp = ta; ta = tb; tb = tmp;
+						}
+						if ((tb - ta) > ISECT_DEDUP_TOLERANCE * (qaws_scalar)10.0)
+						{
+							if (!isect_3d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
+							{
+								if (found < intersection_capacity)
+								{
+									qaws_eval_result_3d rp;
+									qaws_curve_evaluate_3d(curve, ta,
+										QAWS_EVAL_FLAG_POSITION, &rp);
+									out_intersections[found].parameter_a = ta;
+									out_intersections[found].parameter_b = tb;
+									out_intersections[found].position = rp.position;
+								}
+								++found;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	free(params);
+	free(pts);
+	*out_count = found;
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Curve-curve intersection                                           */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_find_intersections_2d(
+	qaws_curve const *curve_a,
+	qaws_curve const *curve_b,
+	qaws_intersection_2d *out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int *out_count)
+{
+	unsigned int na, nb, i, j, found;
+	qaws_scalar a_min, a_max, b_min, b_max;
+	qaws_scalar *params_a = NULL, *params_b = NULL;
+	qaws_vec2 *pts_a = NULL, *pts_b = NULL;
+	qaws_status s;
+
+	if (!curve_a || !curve_b || !out_intersections || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve_a->dimension != QAWS_DIMENSION_2D
+		|| curve_b->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	*out_count = 0;
+	found = 0;
+
+	na = ISECT_SAMPLE_COUNT;
+	nb = ISECT_SAMPLE_COUNT;
+	a_min = curve_a->parameter_range.min_value;
+	a_max = curve_a->parameter_range.max_value;
+	b_min = curve_b->parameter_range.min_value;
+	b_max = curve_b->parameter_range.max_value;
+
+	params_a = (qaws_scalar *)malloc(na * sizeof(qaws_scalar));
+	pts_a = (qaws_vec2 *)malloc(na * sizeof(qaws_vec2));
+	params_b = (qaws_scalar *)malloc(nb * sizeof(qaws_scalar));
+	pts_b = (qaws_vec2 *)malloc(nb * sizeof(qaws_vec2));
+	if (!params_a || !pts_a || !params_b || !pts_b)
+	{
+		free(params_a); free(pts_a); free(params_b); free(pts_b);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	/* Sample both curves */
+	for (i = 0; i < na; ++i)
+	{
+		qaws_eval_result_2d r;
+		params_a[i] = a_min + (qaws_scalar)i * (a_max - a_min) / (qaws_scalar)(na - 1);
+		s = qaws_curve_evaluate_2d(curve_a, params_a[i], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) goto cleanup_2d;
+		pts_a[i] = r.position;
+	}
+	for (j = 0; j < nb; ++j)
+	{
+		qaws_eval_result_2d r;
+		params_b[j] = b_min + (qaws_scalar)j * (b_max - b_min) / (qaws_scalar)(nb - 1);
+		s = qaws_curve_evaluate_2d(curve_b, params_b[j], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) goto cleanup_2d;
+		pts_b[j] = r.position;
+	}
+
+	/* Find candidates: nearby sample pairs from different curves */
+	for (i = 0; i < na; ++i)
+	{
+		for (j = 0; j < nb; ++j)
+		{
+			qaws_scalar dx = pts_a[i].x - pts_b[j].x;
+			qaws_scalar dy = pts_a[i].y - pts_b[j].y;
+			qaws_scalar dist2 = dx * dx + dy * dy;
+
+			if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+				continue;
+
+			{
+				qaws_scalar ta = params_a[i];
+				qaws_scalar tb = params_b[j];
+
+				if (newton_refine_2d(curve_a, curve_b, &ta, &tb,
+					a_min, a_max, b_min, b_max))
+				{
+					if (!isect_2d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
+					{
+						if (found < intersection_capacity)
+						{
+							qaws_eval_result_2d rp;
+							qaws_curve_evaluate_2d(curve_a, ta,
+								QAWS_EVAL_FLAG_POSITION, &rp);
+							out_intersections[found].parameter_a = ta;
+							out_intersections[found].parameter_b = tb;
+							out_intersections[found].position = rp.position;
+						}
+						++found;
+					}
+				}
+			}
+		}
+	}
+
+	s = QAWS_STATUS_OK;
+
+cleanup_2d:
+	free(params_a); free(pts_a); free(params_b); free(pts_b);
+	*out_count = found;
+	return s;
+}
+
+qaws_status qaws_curve_find_intersections_3d(
+	qaws_curve const *curve_a,
+	qaws_curve const *curve_b,
+	qaws_intersection_3d *out_intersections,
+	unsigned int intersection_capacity,
+	unsigned int *out_count)
+{
+	unsigned int na, nb, i, j, found;
+	qaws_scalar a_min, a_max, b_min, b_max;
+	qaws_scalar *params_a = NULL, *params_b = NULL;
+	qaws_vec3 *pts_a = NULL, *pts_b = NULL;
+	qaws_status s;
+
+	if (!curve_a || !curve_b || !out_intersections || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve_a->dimension != QAWS_DIMENSION_3D
+		|| curve_b->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	*out_count = 0;
+	found = 0;
+
+	na = ISECT_SAMPLE_COUNT;
+	nb = ISECT_SAMPLE_COUNT;
+	a_min = curve_a->parameter_range.min_value;
+	a_max = curve_a->parameter_range.max_value;
+	b_min = curve_b->parameter_range.min_value;
+	b_max = curve_b->parameter_range.max_value;
+
+	params_a = (qaws_scalar *)malloc(na * sizeof(qaws_scalar));
+	pts_a = (qaws_vec3 *)malloc(na * sizeof(qaws_vec3));
+	params_b = (qaws_scalar *)malloc(nb * sizeof(qaws_scalar));
+	pts_b = (qaws_vec3 *)malloc(nb * sizeof(qaws_vec3));
+	if (!params_a || !pts_a || !params_b || !pts_b)
+	{
+		free(params_a); free(pts_a); free(params_b); free(pts_b);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	for (i = 0; i < na; ++i)
+	{
+		qaws_eval_result_3d r;
+		params_a[i] = a_min + (qaws_scalar)i * (a_max - a_min) / (qaws_scalar)(na - 1);
+		s = qaws_curve_evaluate_3d(curve_a, params_a[i], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) goto cleanup_3d;
+		pts_a[i] = r.position;
+	}
+	for (j = 0; j < nb; ++j)
+	{
+		qaws_eval_result_3d r;
+		params_b[j] = b_min + (qaws_scalar)j * (b_max - b_min) / (qaws_scalar)(nb - 1);
+		s = qaws_curve_evaluate_3d(curve_b, params_b[j], QAWS_EVAL_FLAG_POSITION, &r);
+		if (s != QAWS_STATUS_OK) goto cleanup_3d;
+		pts_b[j] = r.position;
+	}
+
+	for (i = 0; i < na; ++i)
+	{
+		for (j = 0; j < nb; ++j)
+		{
+			qaws_scalar dx = pts_a[i].x - pts_b[j].x;
+			qaws_scalar dy = pts_a[i].y - pts_b[j].y;
+			qaws_scalar dz = pts_a[i].z - pts_b[j].z;
+			qaws_scalar dist2 = dx * dx + dy * dy + dz * dz;
+
+			if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+				continue;
+
+			{
+				qaws_scalar ta = params_a[i];
+				qaws_scalar tb = params_b[j];
+
+				if (newton_refine_3d(curve_a, curve_b, &ta, &tb,
+					a_min, a_max, b_min, b_max))
+				{
+					if (!isect_3d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
+					{
+						if (found < intersection_capacity)
+						{
+							qaws_eval_result_3d rp;
+							qaws_curve_evaluate_3d(curve_a, ta,
+								QAWS_EVAL_FLAG_POSITION, &rp);
+							out_intersections[found].parameter_a = ta;
+							out_intersections[found].parameter_b = tb;
+							out_intersections[found].position = rp.position;
+						}
+						++found;
+					}
+				}
+			}
+		}
+	}
+
+	s = QAWS_STATUS_OK;
+
+cleanup_3d:
+	free(params_a); free(pts_a); free(params_b); free(pts_b);
+	*out_count = found;
+	return s;
+}

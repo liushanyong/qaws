@@ -87,8 +87,13 @@ typedef enum qaws_motion_profile
 	QAWS_MOTION_PROFILE_NONE = 0,
 	QAWS_MOTION_PROFILE_CONSTANT_SPEED,
 	QAWS_MOTION_PROFILE_CONSTANT_ACCELERATION,
-	QAWS_MOTION_PROFILE_TRAPEZOIDAL_SPEED
+	QAWS_MOTION_PROFILE_TRAPEZOIDAL_SPEED,
+	QAWS_MOTION_PROFILE_S_CURVE,
+	QAWS_MOTION_PROFILE_CUSTOM
 } qaws_motion_profile;
+
+/* Custom speed function: returns speed given distance along the curve. */
+typedef qaws_scalar (*qaws_speed_fn)(qaws_scalar distance, void* user_data);
 
 typedef enum qaws_easing
 {
@@ -164,6 +169,9 @@ typedef struct qaws_traversal_desc
 	int clamp_to_domain;
 	qaws_easing easing;
 	qaws_wrap_mode wrap_mode;
+	qaws_scalar jerk;                      /* max jerk for S-curve profile */
+	qaws_speed_fn custom_speed_fn;         /* custom speed callback */
+	void* custom_speed_fn_user_data;       /* user data for custom speed callback */
 } qaws_traversal_desc;
 
 typedef struct qaws_curve qaws_curve;

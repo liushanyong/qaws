@@ -15,5 +15,7 @@
 #include "qaws_sampling.h"
 #include "qaws_traversal.h"
 #include "qaws_inspect.h"
+#include "qaws_operations.h"
+#include "qaws_convert.h"
 
 #endif /* QAWS_H */

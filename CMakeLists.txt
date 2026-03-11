@@ -52,6 +52,8 @@ set(QAWS_SOURCES
   src/qaws/qaws_nurbs.c
   src/qaws/qaws_trajectory.c
   src/qaws/qaws_yuksel.c
+  src/qaws/qaws_operations.c
+  src/qaws/qaws_convert.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
@@ -164,6 +166,8 @@ if(QAWS_INSTALL)
       src/qaws/qaws_sampling.h
       src/qaws/qaws_traversal.h
       src/qaws/qaws_inspect.h
+      src/qaws/qaws_operations.h
+      src/qaws/qaws_convert.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 

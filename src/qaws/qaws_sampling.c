@@ -1,5 +1,6 @@
 #include "qaws_sampling.h"
 #include "qaws_eval.h"
+#include "qaws_inspect.h"
 #include "internal/qaws_internal_types.h"
 #include "internal/qaws_internal_arc_length.h"
 #include "internal/qaws_internal_cache.h"
@@ -1218,5 +1219,796 @@ qaws_status qaws_curve_sample_eval_3d(
 	}
 
 	*out_sample_count = count;
+	return QAWS_STATUS_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * Curvature-weighted sampling (Task 26)
+ * ------------------------------------------------------------------------- */
+
+#define CURV_WEIGHT_TABLE_SIZE 256
+
+qaws_status qaws_curve_sample_curvature_weighted_2d(
+	qaws_curve const *curve,
+	unsigned int sample_count,
+	qaws_vec2 *out_positions,
+	unsigned int position_capacity,
+	unsigned int *out_position_count)
+{
+	unsigned int n;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_scalar *t_table;
+	qaws_scalar *curv_table;
+	qaws_scalar *cum_weight;
+	qaws_scalar epsilon;
+	qaws_scalar total;
+	qaws_scalar target;
+	qaws_scalar w;
+	qaws_status status;
+	qaws_eval_result_2d result;
+
+	if (!curve || !out_positions || !out_position_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (position_capacity < sample_count)
+	{
+		*out_position_count = sample_count;
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+	}
+
+	n = CURV_WEIGHT_TABLE_SIZE;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+	epsilon = (qaws_scalar)1e-6;
+
+	t_table = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!t_table)
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+
+	curv_table = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!curv_table)
+	{
+		free(t_table);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	cum_weight = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!cum_weight)
+	{
+		free(t_table);
+		free(curv_table);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	/* Step 1: sample curvature at uniform parameter points */
+	for (i = 0; i < n; ++i)
+	{
+		qaws_scalar kappa;
+
+		t_table[i] = range_min + (qaws_scalar)i * (range_max - range_min)
+			/ (qaws_scalar)(n - 1);
+
+		status = qaws_curve_compute_curvature_2d(
+			curve, t_table[i], &kappa);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(t_table);
+			free(curv_table);
+			free(cum_weight);
+			return status;
+		}
+
+		w = kappa;
+		if (w < (qaws_scalar)0.0)
+			w = -w;
+		if (w < epsilon)
+			w = epsilon;
+		curv_table[i] = w;
+	}
+
+	/* Step 2: build cumulative curvature-weighted table */
+	cum_weight[0] = (qaws_scalar)0.0;
+	for (i = 1; i < n; ++i)
+	{
+		cum_weight[i] = cum_weight[i - 1]
+			+ curv_table[i] * (t_table[i] - t_table[i - 1]);
+	}
+
+	total = cum_weight[n - 1];
+
+	/* Step 3: for each output sample, binary search in cum_weight */
+	for (i = 0; i < sample_count; ++i)
+	{
+		unsigned int lo, hi, mid;
+		qaws_scalar frac, t_val;
+
+		if (sample_count == 1)
+			target = (qaws_scalar)0.0;
+		else
+			target = (qaws_scalar)i * total / (qaws_scalar)(sample_count - 1);
+
+		/* Binary search */
+		lo = 0;
+		hi = n - 1;
+		while (lo < hi - 1)
+		{
+			mid = (lo + hi) / 2;
+			if (cum_weight[mid] <= target)
+				lo = mid;
+			else
+				hi = mid;
+		}
+
+		/* Linear interpolation between lo and hi */
+		if (cum_weight[hi] - cum_weight[lo] > (qaws_scalar)0.0)
+			frac = (target - cum_weight[lo])
+				/ (cum_weight[hi] - cum_weight[lo]);
+		else
+			frac = (qaws_scalar)0.0;
+
+		t_val = t_table[lo] + frac * (t_table[hi] - t_table[lo]);
+
+		status = qaws_curve_evaluate_2d(
+			curve, t_val, QAWS_EVAL_FLAG_POSITION, &result);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(t_table);
+			free(curv_table);
+			free(cum_weight);
+			return status;
+		}
+
+		out_positions[i] = result.position;
+	}
+
+	free(t_table);
+	free(curv_table);
+	free(cum_weight);
+
+	*out_position_count = sample_count;
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_sample_curvature_weighted_3d(
+	qaws_curve const *curve,
+	unsigned int sample_count,
+	qaws_vec3 *out_positions,
+	unsigned int position_capacity,
+	unsigned int *out_position_count)
+{
+	unsigned int n;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_scalar *t_table;
+	qaws_scalar *curv_table;
+	qaws_scalar *cum_weight;
+	qaws_scalar epsilon;
+	qaws_scalar total;
+	qaws_scalar target;
+	qaws_scalar w;
+	qaws_status status;
+	qaws_eval_result_3d result;
+
+	if (!curve || !out_positions || !out_position_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (position_capacity < sample_count)
+	{
+		*out_position_count = sample_count;
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+	}
+
+	n = CURV_WEIGHT_TABLE_SIZE;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+	epsilon = (qaws_scalar)1e-6;
+
+	t_table = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!t_table)
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+
+	curv_table = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!curv_table)
+	{
+		free(t_table);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	cum_weight = (qaws_scalar *)malloc(n * sizeof(qaws_scalar));
+	if (!cum_weight)
+	{
+		free(t_table);
+		free(curv_table);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	/* Step 1: sample curvature at uniform parameter points */
+	for (i = 0; i < n; ++i)
+	{
+		qaws_scalar kappa;
+
+		t_table[i] = range_min + (qaws_scalar)i * (range_max - range_min)
+			/ (qaws_scalar)(n - 1);
+
+		status = qaws_curve_compute_curvature_3d(
+			curve, t_table[i], &kappa);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(t_table);
+			free(curv_table);
+			free(cum_weight);
+			return status;
+		}
+
+		w = kappa;
+		if (w < (qaws_scalar)0.0)
+			w = -w;
+		if (w < epsilon)
+			w = epsilon;
+		curv_table[i] = w;
+	}
+
+	/* Step 2: build cumulative curvature-weighted table */
+	cum_weight[0] = (qaws_scalar)0.0;
+	for (i = 1; i < n; ++i)
+	{
+		cum_weight[i] = cum_weight[i - 1]
+			+ curv_table[i] * (t_table[i] - t_table[i - 1]);
+	}
+
+	total = cum_weight[n - 1];
+
+	/* Step 3: for each output sample, binary search in cum_weight */
+	for (i = 0; i < sample_count; ++i)
+	{
+		unsigned int lo, hi, mid;
+		qaws_scalar frac, t_val;
+
+		if (sample_count == 1)
+			target = (qaws_scalar)0.0;
+		else
+			target = (qaws_scalar)i * total / (qaws_scalar)(sample_count - 1);
+
+		/* Binary search */
+		lo = 0;
+		hi = n - 1;
+		while (lo < hi - 1)
+		{
+			mid = (lo + hi) / 2;
+			if (cum_weight[mid] <= target)
+				lo = mid;
+			else
+				hi = mid;
+		}
+
+		/* Linear interpolation between lo and hi */
+		if (cum_weight[hi] - cum_weight[lo] > (qaws_scalar)0.0)
+			frac = (target - cum_weight[lo])
+				/ (cum_weight[hi] - cum_weight[lo]);
+		else
+			frac = (qaws_scalar)0.0;
+
+		t_val = t_table[lo] + frac * (t_table[hi] - t_table[lo]);
+
+		status = qaws_curve_evaluate_3d(
+			curve, t_val, QAWS_EVAL_FLAG_POSITION, &result);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(t_table);
+			free(curv_table);
+			free(cum_weight);
+			return status;
+		}
+
+		out_positions[i] = result.position;
+	}
+
+	free(t_table);
+	free(curv_table);
+	free(cum_weight);
+
+	*out_position_count = sample_count;
+	return QAWS_STATUS_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * Feature-preserving sampling (Task 27)
+ * ------------------------------------------------------------------------- */
+
+#define FEATURE_MAX_INFLECTIONS 128
+#define FEATURE_MAX_EXTREMA_PER_AXIS 128
+#define FEATURE_DEDUP_TOL ((qaws_scalar)1e-10)
+
+/* Insert a parameter into a sorted array, maintaining sort order and
+   skipping duplicates within FEATURE_DEDUP_TOL. Returns updated count. */
+static unsigned int feature_insert_unique(
+	qaws_scalar *params,
+	unsigned int count,
+	qaws_scalar value)
+{
+	unsigned int i, j;
+	qaws_scalar diff;
+
+	/* Check for duplicates */
+	for (i = 0; i < count; ++i)
+	{
+		diff = params[i] - value;
+		if (diff < (qaws_scalar)0.0)
+			diff = -diff;
+		if (diff < FEATURE_DEDUP_TOL)
+			return count; /* duplicate */
+	}
+
+	/* Find insertion position */
+	i = count;
+	while (i > 0 && params[i - 1] > value)
+	{
+		--i;
+	}
+
+	/* Shift elements right */
+	for (j = count; j > i; --j)
+		params[j] = params[j - 1];
+
+	params[i] = value;
+	return count + 1;
+}
+
+qaws_status qaws_curve_sample_feature_preserving_2d(
+	qaws_curve const *curve,
+	unsigned int base_sample_count,
+	qaws_vec2 *out_positions,
+	unsigned int position_capacity,
+	unsigned int *out_position_count)
+{
+	unsigned int max_params;
+	qaws_scalar *params;
+	unsigned int param_count;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_status status;
+	qaws_eval_result_2d result;
+
+	/* Temporary buffers for feature detection */
+	qaws_scalar inflections[FEATURE_MAX_INFLECTIONS];
+	unsigned int inflection_count;
+	qaws_scalar extrema_buf[FEATURE_MAX_EXTREMA_PER_AXIS];
+	unsigned int extrema_count;
+
+	if (!curve || !out_positions || !out_position_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (base_sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	/* Allocate parameter buffer: base + inflections + extrema for 2 axes */
+	max_params = base_sample_count
+		+ FEATURE_MAX_INFLECTIONS
+		+ FEATURE_MAX_EXTREMA_PER_AXIS * 2;
+
+	params = (qaws_scalar *)malloc(max_params * sizeof(qaws_scalar));
+	if (!params)
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+
+	/* Step 1: generate uniform base parameters */
+	param_count = 0;
+	for (i = 0; i < base_sample_count; ++i)
+	{
+		qaws_scalar t;
+
+		if (base_sample_count == 1)
+			t = range_min;
+		else
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)(base_sample_count - 1);
+
+		params[param_count++] = t;
+	}
+
+	/* Step 2: find inflection points */
+	inflection_count = 0;
+	status = qaws_curve_find_inflection_points(
+		curve, inflections, FEATURE_MAX_INFLECTIONS, &inflection_count);
+	if (status == QAWS_STATUS_OK)
+	{
+		for (i = 0; i < inflection_count; ++i)
+			param_count = feature_insert_unique(
+				params, param_count, inflections[i]);
+	}
+
+	/* Step 3: find extrema for axis 0 (x) and axis 1 (y) */
+	{
+		unsigned int axis;
+		for (axis = 0; axis < 2; ++axis)
+		{
+			extrema_count = 0;
+			status = qaws_curve_find_extrema(
+				curve, axis, extrema_buf,
+				FEATURE_MAX_EXTREMA_PER_AXIS, &extrema_count);
+			if (status == QAWS_STATUS_OK)
+			{
+				for (i = 0; i < extrema_count; ++i)
+					param_count = feature_insert_unique(
+						params, param_count, extrema_buf[i]);
+			}
+		}
+	}
+
+	/* Check capacity */
+	if (param_count > position_capacity)
+	{
+		*out_position_count = param_count;
+		free(params);
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+	}
+
+	/* Step 4: evaluate positions at all merged parameters */
+	for (i = 0; i < param_count; ++i)
+	{
+		status = qaws_curve_evaluate_2d(
+			curve, params[i], QAWS_EVAL_FLAG_POSITION, &result);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(params);
+			return status;
+		}
+		out_positions[i] = result.position;
+	}
+
+	*out_position_count = param_count;
+	free(params);
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_sample_feature_preserving_3d(
+	qaws_curve const *curve,
+	unsigned int base_sample_count,
+	qaws_vec3 *out_positions,
+	unsigned int position_capacity,
+	unsigned int *out_position_count)
+{
+	unsigned int max_params;
+	qaws_scalar *params;
+	unsigned int param_count;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_status status;
+	qaws_eval_result_3d result;
+
+	/* Temporary buffers for feature detection */
+	qaws_scalar inflections[FEATURE_MAX_INFLECTIONS];
+	unsigned int inflection_count;
+	qaws_scalar extrema_buf[FEATURE_MAX_EXTREMA_PER_AXIS];
+	unsigned int extrema_count;
+
+	if (!curve || !out_positions || !out_position_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (base_sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	/* Allocate parameter buffer: base + inflections + extrema for 3 axes */
+	max_params = base_sample_count
+		+ FEATURE_MAX_INFLECTIONS
+		+ FEATURE_MAX_EXTREMA_PER_AXIS * 3;
+
+	params = (qaws_scalar *)malloc(max_params * sizeof(qaws_scalar));
+	if (!params)
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+
+	/* Step 1: generate uniform base parameters */
+	param_count = 0;
+	for (i = 0; i < base_sample_count; ++i)
+	{
+		qaws_scalar t;
+
+		if (base_sample_count == 1)
+			t = range_min;
+		else
+			t = range_min + (qaws_scalar)i * (range_max - range_min)
+				/ (qaws_scalar)(base_sample_count - 1);
+
+		params[param_count++] = t;
+	}
+
+	/* Step 2: find inflection points */
+	inflection_count = 0;
+	status = qaws_curve_find_inflection_points(
+		curve, inflections, FEATURE_MAX_INFLECTIONS, &inflection_count);
+	if (status == QAWS_STATUS_OK)
+	{
+		for (i = 0; i < inflection_count; ++i)
+			param_count = feature_insert_unique(
+				params, param_count, inflections[i]);
+	}
+
+	/* Step 3: find extrema for axis 0 (x), 1 (y), 2 (z) */
+	{
+		unsigned int axis;
+		for (axis = 0; axis < 3; ++axis)
+		{
+			extrema_count = 0;
+			status = qaws_curve_find_extrema(
+				curve, axis, extrema_buf,
+				FEATURE_MAX_EXTREMA_PER_AXIS, &extrema_count);
+			if (status == QAWS_STATUS_OK)
+			{
+				for (i = 0; i < extrema_count; ++i)
+					param_count = feature_insert_unique(
+						params, param_count, extrema_buf[i]);
+			}
+		}
+	}
+
+	/* Check capacity */
+	if (param_count > position_capacity)
+	{
+		*out_position_count = param_count;
+		free(params);
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+	}
+
+	/* Step 4: evaluate positions at all merged parameters */
+	for (i = 0; i < param_count; ++i)
+	{
+		status = qaws_curve_evaluate_3d(
+			curve, params[i], QAWS_EVAL_FLAG_POSITION, &result);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(params);
+			return status;
+		}
+		out_positions[i] = result.position;
+	}
+
+	*out_position_count = param_count;
+	free(params);
+	return QAWS_STATUS_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * Streaming / callback-based sampling (Task 28)
+ * ------------------------------------------------------------------------- */
+
+qaws_status qaws_curve_sample_streaming_2d(
+	qaws_curve const *curve,
+	qaws_sampling_desc const *desc,
+	qaws_sample_callback_2d callback,
+	void *user_data)
+{
+	unsigned int count;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_scalar t;
+	qaws_eval_result_2d result;
+	qaws_status status;
+
+	if (!curve || !desc || !callback)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	count = desc->sample_count;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	if (desc->traversal_mode == QAWS_TRAVERSAL_MODE_ARC_LENGTH)
+	{
+		unsigned int table_size = QAWS_ARC_LENGTH_TABLE_SIZE;
+		qaws_scalar *table_params;
+		qaws_scalar *table_distances;
+		qaws_scalar total_length;
+		qaws_scalar target_dist;
+		qaws_scalar param;
+
+		table_params = (qaws_scalar *)malloc(table_size * sizeof(qaws_scalar));
+		if (!table_params)
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+
+		table_distances = (qaws_scalar *)malloc(table_size * sizeof(qaws_scalar));
+		if (!table_distances)
+		{
+			free(table_params);
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+		}
+
+		status = qaws_internal_build_arc_length_table(
+			curve, table_size, table_params, table_distances);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(table_params);
+			free(table_distances);
+			return status;
+		}
+
+		total_length = table_distances[table_size - 1];
+
+		for (i = 0; i < count; ++i)
+		{
+			if (count == 1)
+				target_dist = (qaws_scalar)0.0;
+			else
+				target_dist = (qaws_scalar)i * total_length
+					/ (qaws_scalar)(count - 1);
+
+			param = qaws_internal_distance_to_parameter(
+				table_params, table_distances, table_size, target_dist);
+
+			status = qaws_curve_evaluate_2d(
+				curve, param, QAWS_EVAL_FLAG_POSITION, &result);
+			if (status != QAWS_STATUS_OK)
+			{
+				free(table_params);
+				free(table_distances);
+				return status;
+			}
+
+			if (!callback(param, &result.position, user_data))
+			{
+				free(table_params);
+				free(table_distances);
+				return QAWS_STATUS_OK;
+			}
+		}
+
+		free(table_params);
+		free(table_distances);
+	}
+	else
+	{
+		/* PARAMETER mode (default) */
+		for (i = 0; i < count; ++i)
+		{
+			if (count == 1)
+				t = range_min;
+			else
+				t = range_min + (qaws_scalar)i * (range_max - range_min)
+					/ (qaws_scalar)(count - 1);
+
+			status = qaws_curve_evaluate_2d(
+				curve, t, QAWS_EVAL_FLAG_POSITION, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			if (!callback(t, &result.position, user_data))
+				return QAWS_STATUS_OK;
+		}
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_sample_streaming_3d(
+	qaws_curve const *curve,
+	qaws_sampling_desc const *desc,
+	qaws_sample_callback_3d callback,
+	void *user_data)
+{
+	unsigned int count;
+	unsigned int i;
+	qaws_scalar range_min, range_max;
+	qaws_scalar t;
+	qaws_eval_result_3d result;
+	qaws_status status;
+
+	if (!curve || !desc || !callback)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	if (curve->dimension != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	count = desc->sample_count;
+	range_min = curve->parameter_range.min_value;
+	range_max = curve->parameter_range.max_value;
+
+	if (desc->traversal_mode == QAWS_TRAVERSAL_MODE_ARC_LENGTH)
+	{
+		unsigned int table_size = QAWS_ARC_LENGTH_TABLE_SIZE;
+		qaws_scalar *table_params;
+		qaws_scalar *table_distances;
+		qaws_scalar total_length;
+		qaws_scalar target_dist;
+		qaws_scalar param;
+
+		table_params = (qaws_scalar *)malloc(table_size * sizeof(qaws_scalar));
+		if (!table_params)
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+
+		table_distances = (qaws_scalar *)malloc(table_size * sizeof(qaws_scalar));
+		if (!table_distances)
+		{
+			free(table_params);
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+		}
+
+		status = qaws_internal_build_arc_length_table(
+			curve, table_size, table_params, table_distances);
+		if (status != QAWS_STATUS_OK)
+		{
+			free(table_params);
+			free(table_distances);
+			return status;
+		}
+
+		total_length = table_distances[table_size - 1];
+
+		for (i = 0; i < count; ++i)
+		{
+			if (count == 1)
+				target_dist = (qaws_scalar)0.0;
+			else
+				target_dist = (qaws_scalar)i * total_length
+					/ (qaws_scalar)(count - 1);
+
+			param = qaws_internal_distance_to_parameter(
+				table_params, table_distances, table_size, target_dist);
+
+			status = qaws_curve_evaluate_3d(
+				curve, param, QAWS_EVAL_FLAG_POSITION, &result);
+			if (status != QAWS_STATUS_OK)
+			{
+				free(table_params);
+				free(table_distances);
+				return status;
+			}
+
+			if (!callback(param, &result.position, user_data))
+			{
+				free(table_params);
+				free(table_distances);
+				return QAWS_STATUS_OK;
+			}
+		}
+
+		free(table_params);
+		free(table_distances);
+	}
+	else
+	{
+		/* PARAMETER mode (default) */
+		for (i = 0; i < count; ++i)
+		{
+			if (count == 1)
+				t = range_min;
+			else
+				t = range_min + (qaws_scalar)i * (range_max - range_min)
+					/ (qaws_scalar)(count - 1);
+
+			status = qaws_curve_evaluate_3d(
+				curve, t, QAWS_EVAL_FLAG_POSITION, &result);
+			if (status != QAWS_STATUS_OK)
+				return status;
+
+			if (!callback(t, &result.position, user_data))
+				return QAWS_STATUS_OK;
+		}
+	}
+
 	return QAWS_STATUS_OK;
 }

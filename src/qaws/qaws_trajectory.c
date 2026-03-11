@@ -72,18 +72,17 @@ static qaws_status trajectory_eval_span_2d(
 	unsigned int eval_flags,
 	qaws_eval_result_2d *out_result)
 {
-	unsigned int const dim_count = 2;
 	qaws_trajectory_impl *impl = (qaws_trajectory_impl *)curve->impl;
+	unsigned int const dim_count = 2;
 	unsigned int s = span_index;
 	qaws_scalar dt;
-	qaws_scalar const *p0;
-	qaws_scalar const *p1;
-	qaws_scalar const *v0;
-	qaws_scalar const *v1;
-	qaws_scalar m0[2], m1[2];
-	qaws_scalar h[4], dh[4], d2h[4], d3h[4];
-	int need_d1, need_d2, need_d3;
-	unsigned int d;
+	qaws_scalar t = local_t;
+	qaws_scalar t2 = t * t;
+	qaws_scalar t3 = t2 * t;
+	qaws_scalar const *cx;
+	qaws_scalar const *cy;
+	qaws_scalar ax, bx, cx_coeff, dx_val;
+	qaws_scalar ay, by, cy_coeff, dy_val;
 	qaws_scalar inv_dt, inv_dt2, inv_dt3;
 
 	memset(out_result, 0, sizeof(*out_result));
@@ -92,60 +91,38 @@ static qaws_status trajectory_eval_span_2d(
 	if (dt < (qaws_scalar)1e-10)
 		return QAWS_STATUS_DEGENERATE_CURVE;
 
-	/* Gather positions and velocities for the span */
-	p0 = &impl->key_positions[s * dim_count];
-	p1 = &impl->key_positions[(s + 1) * dim_count];
-	v0 = &impl->key_velocities[s * dim_count];
-	v1 = &impl->key_velocities[(s + 1) * dim_count];
+	cx = &impl->span_coeffs[s * dim_count * 4 + 0 * 4];
+	cy = &impl->span_coeffs[s * dim_count * 4 + 1 * 4];
 
-	/* Scaled tangents for Hermite interpolation */
-	for (d = 0; d < dim_count; ++d)
-	{
-		m0[d] = v0[d] * dt;
-		m1[d] = v1[d] * dt;
-	}
+	ax = cx[0]; bx = cx[1]; cx_coeff = cx[2]; dx_val = cx[3];
+	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
 
-	need_d1 = (eval_flags & QAWS_EVAL_FLAG_D1) != 0;
-	need_d2 = (eval_flags & QAWS_EVAL_FLAG_D2) != 0;
-	need_d3 = (eval_flags & QAWS_EVAL_FLAG_D3) != 0;
-
-	/* Compute Hermite basis values */
-	qaws_internal_hermite_basis(
-		local_t,
-		h,
-		(need_d1 || need_d2 || need_d3) ? dh : NULL,
-		(need_d2 || need_d3) ? d2h : NULL,
-		need_d3 ? d3h : NULL);
-
-	/* Position */
+	/* Position: P(u) */
 	out_result->valid_flags = QAWS_EVAL_FLAG_POSITION;
-	out_result->position.x = h[0] * p0[0] + h[1] * m0[0] + h[2] * p1[0] + h[3] * m1[0];
-	out_result->position.y = h[0] * p0[1] + h[1] * m0[1] + h[2] * p1[1] + h[3] * m1[1];
+	out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
+	out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
 
-	/* First derivative: dP/du / dt */
-	if (need_d1 || need_d2 || need_d3)
-	{
+	/* D1: P'(u) / dt */
+	if ((eval_flags & QAWS_EVAL_FLAG_D1) || (eval_flags & QAWS_EVAL_FLAG_D2) || (eval_flags & QAWS_EVAL_FLAG_D3)) {
 		inv_dt = (qaws_scalar)1.0 / dt;
-		out_result->d1.x = (dh[0] * p0[0] + dh[1] * m0[0] + dh[2] * p1[0] + dh[3] * m1[0]) * inv_dt;
-		out_result->d1.y = (dh[0] * p0[1] + dh[1] * m0[1] + dh[2] * p1[1] + dh[3] * m1[1]) * inv_dt;
+		out_result->d1.x = ((qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff) * inv_dt;
+		out_result->d1.y = ((qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff) * inv_dt;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
-	/* Second derivative: d2P/du2 / dt^2 */
-	if (need_d2 || need_d3)
-	{
+	/* D2: P''(u) / dt^2 */
+	if ((eval_flags & QAWS_EVAL_FLAG_D2) || (eval_flags & QAWS_EVAL_FLAG_D3)) {
 		inv_dt2 = (qaws_scalar)1.0 / (dt * dt);
-		out_result->d2.x = (d2h[0] * p0[0] + d2h[1] * m0[0] + d2h[2] * p1[0] + d2h[3] * m1[0]) * inv_dt2;
-		out_result->d2.y = (d2h[0] * p0[1] + d2h[1] * m0[1] + d2h[2] * p1[1] + d2h[3] * m1[1]) * inv_dt2;
+		out_result->d2.x = ((qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx) * inv_dt2;
+		out_result->d2.y = ((qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by) * inv_dt2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
-	/* Third derivative: d3P/du3 / dt^3 */
-	if (need_d3)
-	{
+	/* D3: P'''(u) / dt^3 */
+	if (eval_flags & QAWS_EVAL_FLAG_D3) {
 		inv_dt3 = (qaws_scalar)1.0 / (dt * dt * dt);
-		out_result->d3.x = (d3h[0] * p0[0] + d3h[1] * m0[0] + d3h[2] * p1[0] + d3h[3] * m1[0]) * inv_dt3;
-		out_result->d3.y = (d3h[0] * p0[1] + d3h[1] * m0[1] + d3h[2] * p1[1] + d3h[3] * m1[1]) * inv_dt3;
+		out_result->d3.x = ((qaws_scalar)6.0 * ax) * inv_dt3;
+		out_result->d3.y = ((qaws_scalar)6.0 * ay) * inv_dt3;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -163,18 +140,19 @@ static qaws_status trajectory_eval_span_3d(
 	unsigned int eval_flags,
 	qaws_eval_result_3d *out_result)
 {
-	unsigned int const dim_count = 3;
 	qaws_trajectory_impl *impl = (qaws_trajectory_impl *)curve->impl;
+	unsigned int const dim_count = 3;
 	unsigned int s = span_index;
 	qaws_scalar dt;
-	qaws_scalar const *p0;
-	qaws_scalar const *p1;
-	qaws_scalar const *v0;
-	qaws_scalar const *v1;
-	qaws_scalar m0[3], m1[3];
-	qaws_scalar h[4], dh[4], d2h[4], d3h[4];
-	int need_d1, need_d2, need_d3;
-	unsigned int d;
+	qaws_scalar t = local_t;
+	qaws_scalar t2 = t * t;
+	qaws_scalar t3 = t2 * t;
+	qaws_scalar const *cx;
+	qaws_scalar const *cy;
+	qaws_scalar const *cz;
+	qaws_scalar ax, bx, cx_coeff, dx_val;
+	qaws_scalar ay, by, cy_coeff, dy_val;
+	qaws_scalar az, bz, cz_coeff, dz_val;
 	qaws_scalar inv_dt, inv_dt2, inv_dt3;
 
 	memset(out_result, 0, sizeof(*out_result));
@@ -183,64 +161,44 @@ static qaws_status trajectory_eval_span_3d(
 	if (dt < (qaws_scalar)1e-10)
 		return QAWS_STATUS_DEGENERATE_CURVE;
 
-	/* Gather positions and velocities for the span */
-	p0 = &impl->key_positions[s * dim_count];
-	p1 = &impl->key_positions[(s + 1) * dim_count];
-	v0 = &impl->key_velocities[s * dim_count];
-	v1 = &impl->key_velocities[(s + 1) * dim_count];
+	cx = &impl->span_coeffs[s * dim_count * 4 + 0 * 4];
+	cy = &impl->span_coeffs[s * dim_count * 4 + 1 * 4];
+	cz = &impl->span_coeffs[s * dim_count * 4 + 2 * 4];
 
-	/* Scaled tangents for Hermite interpolation */
-	for (d = 0; d < dim_count; ++d)
-	{
-		m0[d] = v0[d] * dt;
-		m1[d] = v1[d] * dt;
-	}
+	ax = cx[0]; bx = cx[1]; cx_coeff = cx[2]; dx_val = cx[3];
+	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
+	az = cz[0]; bz = cz[1]; cz_coeff = cz[2]; dz_val = cz[3];
 
-	need_d1 = (eval_flags & QAWS_EVAL_FLAG_D1) != 0;
-	need_d2 = (eval_flags & QAWS_EVAL_FLAG_D2) != 0;
-	need_d3 = (eval_flags & QAWS_EVAL_FLAG_D3) != 0;
-
-	/* Compute Hermite basis values */
-	qaws_internal_hermite_basis(
-		local_t,
-		h,
-		(need_d1 || need_d2 || need_d3) ? dh : NULL,
-		(need_d2 || need_d3) ? d2h : NULL,
-		need_d3 ? d3h : NULL);
-
-	/* Position */
+	/* Position: P(u) */
 	out_result->valid_flags = QAWS_EVAL_FLAG_POSITION;
-	out_result->position.x = h[0] * p0[0] + h[1] * m0[0] + h[2] * p1[0] + h[3] * m1[0];
-	out_result->position.y = h[0] * p0[1] + h[1] * m0[1] + h[2] * p1[1] + h[3] * m1[1];
-	out_result->position.z = h[0] * p0[2] + h[1] * m0[2] + h[2] * p1[2] + h[3] * m1[2];
+	out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
+	out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
+	out_result->position.z = az * t3 + bz * t2 + cz_coeff * t + dz_val;
 
-	/* First derivative: dP/du / dt */
-	if (need_d1 || need_d2 || need_d3)
-	{
+	/* D1: P'(u) / dt */
+	if ((eval_flags & QAWS_EVAL_FLAG_D1) || (eval_flags & QAWS_EVAL_FLAG_D2) || (eval_flags & QAWS_EVAL_FLAG_D3)) {
 		inv_dt = (qaws_scalar)1.0 / dt;
-		out_result->d1.x = (dh[0] * p0[0] + dh[1] * m0[0] + dh[2] * p1[0] + dh[3] * m1[0]) * inv_dt;
-		out_result->d1.y = (dh[0] * p0[1] + dh[1] * m0[1] + dh[2] * p1[1] + dh[3] * m1[1]) * inv_dt;
-		out_result->d1.z = (dh[0] * p0[2] + dh[1] * m0[2] + dh[2] * p1[2] + dh[3] * m1[2]) * inv_dt;
+		out_result->d1.x = ((qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff) * inv_dt;
+		out_result->d1.y = ((qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff) * inv_dt;
+		out_result->d1.z = ((qaws_scalar)3.0 * az * t2 + (qaws_scalar)2.0 * bz * t + cz_coeff) * inv_dt;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
-	/* Second derivative: d2P/du2 / dt^2 */
-	if (need_d2 || need_d3)
-	{
+	/* D2: P''(u) / dt^2 */
+	if ((eval_flags & QAWS_EVAL_FLAG_D2) || (eval_flags & QAWS_EVAL_FLAG_D3)) {
 		inv_dt2 = (qaws_scalar)1.0 / (dt * dt);
-		out_result->d2.x = (d2h[0] * p0[0] + d2h[1] * m0[0] + d2h[2] * p1[0] + d2h[3] * m1[0]) * inv_dt2;
-		out_result->d2.y = (d2h[0] * p0[1] + d2h[1] * m0[1] + d2h[2] * p1[1] + d2h[3] * m1[1]) * inv_dt2;
-		out_result->d2.z = (d2h[0] * p0[2] + d2h[1] * m0[2] + d2h[2] * p1[2] + d2h[3] * m1[2]) * inv_dt2;
+		out_result->d2.x = ((qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx) * inv_dt2;
+		out_result->d2.y = ((qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by) * inv_dt2;
+		out_result->d2.z = ((qaws_scalar)6.0 * az * t + (qaws_scalar)2.0 * bz) * inv_dt2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
-	/* Third derivative: d3P/du3 / dt^3 */
-	if (need_d3)
-	{
+	/* D3: P'''(u) / dt^3 */
+	if (eval_flags & QAWS_EVAL_FLAG_D3) {
 		inv_dt3 = (qaws_scalar)1.0 / (dt * dt * dt);
-		out_result->d3.x = (d3h[0] * p0[0] + d3h[1] * m0[0] + d3h[2] * p1[0] + d3h[3] * m1[0]) * inv_dt3;
-		out_result->d3.y = (d3h[0] * p0[1] + d3h[1] * m0[1] + d3h[2] * p1[1] + d3h[3] * m1[1]) * inv_dt3;
-		out_result->d3.z = (d3h[0] * p0[2] + d3h[1] * m0[2] + d3h[2] * p1[2] + d3h[3] * m1[2]) * inv_dt3;
+		out_result->d3.x = ((qaws_scalar)6.0 * ax) * inv_dt3;
+		out_result->d3.y = ((qaws_scalar)6.0 * ay) * inv_dt3;
+		out_result->d3.z = ((qaws_scalar)6.0 * az) * inv_dt3;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -256,6 +214,7 @@ static void trajectory_destroy_impl(void *impl)
 	qaws_trajectory_impl *ti = (qaws_trajectory_impl *)impl;
 	if (ti)
 	{
+		free(ti->span_coeffs);
 		free(ti->key_positions);
 		free(ti->key_times);
 		free(ti->key_velocities);
@@ -473,6 +432,41 @@ qaws_status qaws_curve_create_trajectory(
 		}
 		memcpy(impl->key_accelerations, desc->key_accelerations, acc_size);
 		impl->key_acceleration_count = desc->key_acceleration_count;
+	}
+
+	/* Precompute per-span polynomial coefficients: a*u^3 + b*u^2 + c*u + d */
+	{
+		unsigned int s, d;
+		impl->span_coeffs = (qaws_scalar *)malloc(
+			sizeof(qaws_scalar) * (size_t)span_count * (size_t)dim_count * 4);
+		if (!impl->span_coeffs) {
+			free(impl->key_accelerations);
+			free(impl->key_velocities);
+			free(impl->key_times);
+			free(impl->key_positions);
+			free(impl);
+			qaws_curve_destroy(curve);
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+		}
+		for (s = 0; s < span_count; s++) {
+			qaws_scalar dt = impl->key_times[s + 1] - impl->key_times[s];
+			qaws_scalar const *p0 = impl->key_positions + s * dim_count;
+			qaws_scalar const *p1 = impl->key_positions + (s + 1) * dim_count;
+			qaws_scalar const *v0 = impl->key_velocities + s * dim_count;
+			qaws_scalar const *v1 = impl->key_velocities + (s + 1) * dim_count;
+			for (d = 0; d < dim_count; d++) {
+				qaws_scalar m0 = v0[d] * dt;
+				qaws_scalar m1 = v1[d] * dt;
+				qaws_scalar a_coeff = (qaws_scalar)2.0 * p0[d] + m0 - (qaws_scalar)2.0 * p1[d] + m1;
+				qaws_scalar b_coeff = (qaws_scalar)-3.0 * p0[d] - (qaws_scalar)2.0 * m0 + (qaws_scalar)3.0 * p1[d] - m1;
+				qaws_scalar c_coeff = m0;
+				qaws_scalar d_coeff = p0[d];
+				impl->span_coeffs[(s * dim_count + d) * 4 + 0] = a_coeff;
+				impl->span_coeffs[(s * dim_count + d) * 4 + 1] = b_coeff;
+				impl->span_coeffs[(s * dim_count + d) * 4 + 2] = c_coeff;
+				impl->span_coeffs[(s * dim_count + d) * 4 + 3] = d_coeff;
+			}
+		}
 	}
 
 	curve->impl = impl;

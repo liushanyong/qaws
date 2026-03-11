@@ -55,6 +55,67 @@ static qaws_scalar vlength(qaws_scalar const* a, unsigned int dim)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Osculating plane helper for 3D circular/elliptical fitting         */
+/* ------------------------------------------------------------------ */
+
+/* Build an orthonormal frame from triplet (pj, pi, pk) in 3D.
+   Returns 1 on success, 0 if points are collinear/degenerate.
+   On success: u, w are unit vectors spanning the osculating plane,
+   and normal = u x w. Origin is at pi. */
+static int compute_osculating_frame(
+	qaws_scalar const* pj, qaws_scalar const* pi, qaws_scalar const* pk,
+	qaws_scalar* u_out, qaws_scalar* w_out)
+{
+	qaws_scalar v1[3], v2[3], normal[3];
+	qaws_scalar len_n, len_v1;
+
+	vsub(v1, pj, pi, 3);
+	vsub(v2, pk, pi, 3);
+
+	/* normal = v1 x v2 */
+	normal[0] = v1[1] * v2[2] - v1[2] * v2[1];
+	normal[1] = v1[2] * v2[0] - v1[0] * v2[2];
+	normal[2] = v1[0] * v2[1] - v1[1] * v2[0];
+
+	len_n = vlength(normal, 3);
+	if (len_n < (qaws_scalar)1e-10)
+		return 0; /* collinear / degenerate */
+
+	/* Normalize the normal */
+	normal[0] /= len_n;
+	normal[1] /= len_n;
+	normal[2] /= len_n;
+
+	/* u = normalize(v1) */
+	len_v1 = vlength(v1, 3);
+	if (len_v1 < (qaws_scalar)1e-10)
+		return 0;
+	u_out[0] = v1[0] / len_v1;
+	u_out[1] = v1[1] / len_v1;
+	u_out[2] = v1[2] / len_v1;
+
+	/* w = normal x u (already unit length since normal and u are unit and perpendicular) */
+	w_out[0] = normal[1] * u_out[2] - normal[2] * u_out[1];
+	w_out[1] = normal[2] * u_out[0] - normal[0] * u_out[2];
+	w_out[2] = normal[0] * u_out[1] - normal[1] * u_out[0];
+
+	return 1;
+}
+
+/* Project a 3D point onto a 2D frame (origin + u, w axes).
+   Returns the 2D coordinates (px, py). */
+static void project_to_2d(
+	qaws_scalar const* point, qaws_scalar const* origin,
+	qaws_scalar const* u, qaws_scalar const* w,
+	qaws_scalar* px, qaws_scalar* py)
+{
+	qaws_scalar rel[3];
+	vsub(rel, point, origin, 3);
+	*px = vdot(rel, u, 3);
+	*py = vdot(rel, w, 3);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Cubic root via bisection (from Yuksel's reference code)           */
 /* ------------------------------------------------------------------ */
 
@@ -162,12 +223,6 @@ static void compute_circular_subcurve(
 	qaws_scalar angle_j, angle_k;
 	unsigned int d;
 
-	/* Only meaningful in 2D */
-	if (dim != 2) {
-		compute_bezier_subcurve(pts, n, i, closed, dim, sc);
-		return;
-	}
-
 	if (closed) {
 		j = (i + n - 1) % n;
 		k = (i + 1) % n;
@@ -189,6 +244,131 @@ static void compute_circular_subcurve(
 		sc->use_arc = 0;
 		return;
 	}
+
+	/* 3D case: project triplet onto osculating plane, fit in 2D, map back */
+	if (dim == 3) {
+		qaws_scalar frame_u[3], frame_w[3];
+		qaws_scalar pj2x, pj2y, pi2x, pi2y, pk2x, pk2y;
+		qaws_scalar mid_jk2[2], mid_ij2[2], dir_jk2[2], dir_ij2[2];
+		qaws_scalar perp_jk2[2], perp_ij2[2];
+		qaws_scalar diff2[2], center2x, center2y;
+		qaws_scalar ctj2[2], ctk2[2];
+		qaws_scalar denom_cross, len_jk2, len_ij2;
+
+		if (!compute_osculating_frame(pj, pi, pk, frame_u, frame_w)) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+
+		/* Project 3D points to 2D in the osculating plane (origin = pi) */
+		project_to_2d(pj, pi, frame_u, frame_w, &pj2x, &pj2y);
+		pi2x = (qaws_scalar)0;
+		pi2y = (qaws_scalar)0;
+		project_to_2d(pk, pi, frame_u, frame_w, &pk2x, &pk2y);
+
+		/* Midpoints and directions in 2D */
+		mid_jk2[0] = (pj2x + pk2x) / (qaws_scalar)2;
+		mid_jk2[1] = (pj2y + pk2y) / (qaws_scalar)2;
+		mid_ij2[0] = (pi2x + pj2x) / (qaws_scalar)2;
+		mid_ij2[1] = (pi2y + pj2y) / (qaws_scalar)2;
+		dir_jk2[0] = pk2x - pj2x;
+		dir_jk2[1] = pk2y - pj2y;
+		dir_ij2[0] = pj2x - pi2x;
+		dir_ij2[1] = pj2y - pi2y;
+
+		len_jk2 = (qaws_scalar)sqrt((double)(dir_jk2[0]*dir_jk2[0] + dir_jk2[1]*dir_jk2[1]));
+		len_ij2 = (qaws_scalar)sqrt((double)(dir_ij2[0]*dir_ij2[0] + dir_ij2[1]*dir_ij2[1]));
+
+		if (len_jk2 < (qaws_scalar)1e-10 || len_ij2 < (qaws_scalar)1e-10) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+
+		/* Perpendicular bisectors (2D rotate 90) */
+		perp_jk2[0] = -dir_jk2[1];
+		perp_jk2[1] = dir_jk2[0];
+		perp_ij2[0] = -dir_ij2[1];
+		perp_ij2[1] = dir_ij2[0];
+
+		/* Find intersection */
+		denom_cross = perp_jk2[0] * perp_ij2[1] - perp_jk2[1] * perp_ij2[0];
+		if (denom_cross < (qaws_scalar)1e-10 && denom_cross > (qaws_scalar)-1e-10) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+		diff2[0] = mid_ij2[0] - mid_jk2[0];
+		diff2[1] = mid_ij2[1] - mid_jk2[1];
+		t_param = (diff2[0] * perp_ij2[1] - diff2[1] * perp_ij2[0]) / denom_cross;
+
+		center2x = mid_jk2[0] + t_param * perp_jk2[0];
+		center2y = mid_jk2[1] + t_param * perp_jk2[1];
+
+		ctj2[0] = pj2x - center2x;
+		ctj2[1] = pj2y - center2y;
+		ctk2[0] = pk2x - center2x;
+		ctk2[1] = pk2y - center2y;
+
+		sc->radius = (qaws_scalar)sqrt((double)(ctj2[0]*ctj2[0] + ctj2[1]*ctj2[1]));
+		if (sc->radius < (qaws_scalar)1e-10) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+
+		/* Map center back to 3D: center_3d = pi + center2x * frame_u + center2y * frame_w */
+		for (d = 0; d < 3; d++)
+			sc->center[d] = pi[d] + center2x * frame_u[d] + center2y * frame_w[d];
+
+		/* Axis frame in 3D: axis_u points from center toward pj */
+		{
+			qaws_scalar au_len;
+			qaws_scalar au[3];
+			vsub(au, pj, sc->center, 3);
+			au_len = vlength(au, 3);
+			if (au_len < (qaws_scalar)1e-10) {
+				compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+				return;
+			}
+			for (d = 0; d < 3; d++)
+				sc->axis_u[d] = au[d] / au_len;
+		}
+
+		/* axis_v = normal x axis_u (in-plane, perpendicular to axis_u) */
+		{
+			qaws_scalar normal[3];
+			qaws_scalar v1[3], v2[3], len_n;
+			vsub(v1, pj, pi, 3);
+			vsub(v2, pk, pi, 3);
+			normal[0] = v1[1] * v2[2] - v1[2] * v2[1];
+			normal[1] = v1[2] * v2[0] - v1[0] * v2[2];
+			normal[2] = v1[0] * v2[1] - v1[1] * v2[0];
+			len_n = vlength(normal, 3);
+			normal[0] /= len_n;
+			normal[1] /= len_n;
+			normal[2] /= len_n;
+			sc->axis_v[0] = normal[1] * sc->axis_u[2] - normal[2] * sc->axis_u[1];
+			sc->axis_v[1] = normal[2] * sc->axis_u[0] - normal[0] * sc->axis_u[2];
+			sc->axis_v[2] = normal[0] * sc->axis_u[1] - normal[1] * sc->axis_u[0];
+		}
+
+		/* Angles: axis_u points to pj, so angle_start = 0 */
+		{
+			qaws_scalar ctk3[3];
+			vsub(ctk3, pk, sc->center, 3);
+			angle_k = (qaws_scalar)atan2(
+				(double)vdot(ctk3, sc->axis_v, 3),
+				(double)vdot(ctk3, sc->axis_u, 3));
+		}
+
+		sc->angle_start = (qaws_scalar)0;
+		sc->angle_end = angle_k;
+		sc->radius_b = sc->radius;
+		sc->use_arc = 1;
+		sc->t1 = (qaws_scalar)0.5;
+		vcopy(sc->p1, pi, dim);
+		return;
+	}
+
+	/* 2D case: original code */
 
 	/* Midpoints of (j,k) and (i,j) */
 	for (d = 0; d < dim; d++) {
@@ -273,11 +453,6 @@ static void compute_elliptical_subcurve(
 	int iter;
 	unsigned int d;
 
-	if (dim != 2) {
-		compute_bezier_subcurve(pts, n, i, closed, dim, sc);
-		return;
-	}
-
 	if (closed) {
 		j = (i + n - 1) % n;
 		k = (i + 1) % n;
@@ -299,6 +474,101 @@ static void compute_elliptical_subcurve(
 		sc->use_arc = 0;
 		return;
 	}
+
+	/* 3D case: project triplet onto osculating plane, fit ellipse in 2D, map back */
+	if (dim == 3) {
+		qaws_scalar frame_u[3], frame_w[3];
+		qaws_scalar pj2x, pj2y, pi2x, pi2y, pk2x, pk2y;
+		qaws_scalar mid2[2], dir2[2], len2, half_len2;
+		qaws_scalar au2[2], av2[2];
+		qaws_scalar pirel2[2], px2, py2;
+		qaws_scalar a2, b2;
+		int iter2;
+		qaws_scalar center2x, center2y;
+
+		if (!compute_osculating_frame(pj, pi, pk, frame_u, frame_w)) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+
+		/* Project 3D points to 2D (origin = pi) */
+		project_to_2d(pj, pi, frame_u, frame_w, &pj2x, &pj2y);
+		pi2x = (qaws_scalar)0;
+		pi2y = (qaws_scalar)0;
+		project_to_2d(pk, pi, frame_u, frame_w, &pk2x, &pk2y);
+
+		/* Center at midpoint of (pj2, pk2) */
+		mid2[0] = (pj2x + pk2x) / (qaws_scalar)2;
+		mid2[1] = (pj2y + pk2y) / (qaws_scalar)2;
+		dir2[0] = pk2x - pj2x;
+		dir2[1] = pk2y - pj2y;
+		len2 = (qaws_scalar)sqrt((double)(dir2[0]*dir2[0] + dir2[1]*dir2[1]));
+		if (len2 < (qaws_scalar)1e-10) {
+			compute_bezier_subcurve(pts, n, i, closed, dim, sc);
+			return;
+		}
+		half_len2 = len2 / (qaws_scalar)2;
+
+		/* 2D frame: au along pj->pk, av perpendicular */
+		au2[0] = dir2[0] / len2;
+		au2[1] = dir2[1] / len2;
+		av2[0] = -au2[1];
+		av2[1] = au2[0];
+
+		/* Project pi (at origin in 2D) into local ellipse frame */
+		pirel2[0] = pi2x - mid2[0];
+		pirel2[1] = pi2y - mid2[1];
+		px2 = pirel2[0] * au2[0] + pirel2[1] * au2[1];
+		py2 = pirel2[0] * av2[0] + pirel2[1] * av2[1];
+		if (py2 < (qaws_scalar)0) py2 = -py2;
+
+		a2 = half_len2;
+		b2 = py2;
+		if (b2 < (qaws_scalar)0.01) b2 = (qaws_scalar)0.01;
+
+		for (iter2 = 0; iter2 < 16; iter2++) {
+			qaws_scalar x2a2 = (px2 * px2) / (a2 * a2);
+			qaws_scalar denom_val = (qaws_scalar)1 - x2a2;
+			if (denom_val < (qaws_scalar)0.001) denom_val = (qaws_scalar)0.001;
+			b2 = py2 / (qaws_scalar)sqrt((double)denom_val);
+			if (b2 < (qaws_scalar)0.01) b2 = (qaws_scalar)0.01;
+		}
+
+		/* Map center back to 3D: first, 2D center is mid2 relative to pi */
+		center2x = mid2[0];
+		center2y = mid2[1];
+		for (d = 0; d < 3; d++)
+			sc->center[d] = pi[d] + center2x * frame_u[d] + center2y * frame_w[d];
+
+		/* Map axis_u (along pj->pk direction) back to 3D */
+		for (d = 0; d < 3; d++)
+			sc->axis_u[d] = au2[0] * frame_u[d] + au2[1] * frame_w[d];
+
+		/* Map axis_v (perpendicular in-plane) back to 3D */
+		for (d = 0; d < 3; d++)
+			sc->axis_v[d] = av2[0] * frame_u[d] + av2[1] * frame_w[d];
+
+		sc->radius = a2;
+		sc->radius_b = b2;
+
+		sc->angle_start = QAWS_PI;
+		sc->angle_end = (qaws_scalar)0;
+
+		/* Detect which way pi is relative to the chord in 2D */
+		{
+			qaws_scalar cross2 = dir2[0] * (pi2y - pj2y) - dir2[1] * (pi2x - pj2x);
+			if (cross2 < 0) {
+				sc->radius_b = -b2;
+			}
+		}
+
+		sc->use_arc = 1;
+		sc->t1 = (qaws_scalar)0.5;
+		vcopy(sc->p1, pi, dim);
+		return;
+	}
+
+	/* 2D case: original code */
 
 	/* Ellipse fitting: center at midpoint of (pj, pk), major axis along pj->pk */
 	for (d = 0; d < dim; d++)
@@ -335,7 +605,7 @@ static void compute_elliptical_subcurve(
 	if (b < (qaws_scalar)0.01) b = (qaws_scalar)0.01;
 
 	for (iter = 0; iter < 16; iter++) {
-		/* For the ellipse x²/a² + y²/b² = 1, point pi should lie on it */
+		/* For the ellipse x^2/a^2 + y^2/b^2 = 1, point pi should lie on it */
 		/* Adjust b so that the ellipse passes through pi */
 		qaws_scalar x2a2 = (px * px) / (a * a);
 		qaws_scalar denom_val = (qaws_scalar)1 - x2a2;
@@ -374,11 +644,6 @@ static void compute_hybrid_subcurve(
 	qaws_scalar const* pts, unsigned int n, unsigned int i,
 	int closed, unsigned int dim, qaws_yuksel_subcurve* sc)
 {
-	if (dim != 2) {
-		compute_bezier_subcurve(pts, n, i, closed, dim, sc);
-		return;
-	}
-
 	/* Try circular first */
 	compute_circular_subcurve(pts, n, i, closed, dim, sc);
 
@@ -429,11 +694,7 @@ static void eval_subcurve_arc(
 {
 	qaws_scalar angle, ca, sa, ra, rb;
 	qaws_scalar da_dt;
-
-	if (dim != 2) {
-		eval_subcurve_bezier(sc, t, dim, out_pos, out_d1, out_d2);
-		return;
-	}
+	unsigned int d;
 
 	angle = sc->angle_start + t * (sc->angle_end - sc->angle_start);
 	da_dt = sc->angle_end - sc->angle_start;
@@ -443,18 +704,18 @@ static void eval_subcurve_arc(
 	rb = sc->radius_b;
 
 	if (out_pos) {
-		out_pos[0] = sc->center[0] + ra * ca * sc->axis_u[0] + rb * sa * sc->axis_v[0];
-		out_pos[1] = sc->center[1] + ra * ca * sc->axis_u[1] + rb * sa * sc->axis_v[1];
+		for (d = 0; d < dim; d++)
+			out_pos[d] = sc->center[d] + ra * ca * sc->axis_u[d] + rb * sa * sc->axis_v[d];
 	}
 
 	if (out_d1) {
-		out_d1[0] = (-ra * sa * sc->axis_u[0] + rb * ca * sc->axis_v[0]) * da_dt;
-		out_d1[1] = (-ra * sa * sc->axis_u[1] + rb * ca * sc->axis_v[1]) * da_dt;
+		for (d = 0; d < dim; d++)
+			out_d1[d] = (-ra * sa * sc->axis_u[d] + rb * ca * sc->axis_v[d]) * da_dt;
 	}
 
 	if (out_d2) {
-		out_d2[0] = (-ra * ca * sc->axis_u[0] - rb * sa * sc->axis_v[0]) * da_dt * da_dt;
-		out_d2[1] = (-ra * ca * sc->axis_u[1] - rb * sa * sc->axis_v[1]) * da_dt * da_dt;
+		for (d = 0; d < dim; d++)
+			out_d2[d] = (-ra * ca * sc->axis_u[d] - rb * sa * sc->axis_v[d]) * da_dt * da_dt;
 	}
 }
 
@@ -790,10 +1051,6 @@ qaws_status qaws_curve_create_yuksel(
 		return QAWS_STATUS_INVALID_CONTROL_POINT_COUNT;
 
 	if (!desc->control_points)
-		return QAWS_STATUS_INVALID_ARGUMENT;
-
-	/* Circular/elliptical/hybrid only supported in 2D */
-	if (desc->mode != QAWS_YUKSEL_MODE_BEZIER && desc->dimension != QAWS_DIMENSION_2D)
 		return QAWS_STATUS_INVALID_ARGUMENT;
 
 	dim_count = (desc->dimension == QAWS_DIMENSION_2D) ? 2u : 3u;
