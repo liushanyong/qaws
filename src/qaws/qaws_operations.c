@@ -111,6 +111,12 @@ qaws_status qaws_curve_split(
 		return split_trajectory(curve, parameter, out_left, out_right);
 
 	case QAWS_CURVE_KIND_YUKSEL:
+	case QAWS_CURVE_KIND_RATIONAL_BEZIER:
+	case QAWS_CURVE_KIND_COMPOSITE:
+	case QAWS_CURVE_KIND_ARC:
+	case QAWS_CURVE_KIND_POLYNOMIAL:
+	case QAWS_CURVE_KIND_CLOTHOID:
+	case QAWS_CURVE_KIND_SUBDIVISION:
 		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 
 	default:
@@ -160,6 +166,12 @@ qaws_status qaws_curve_join(
 		return join_trajectory(curve_a, curve_b, out_joined);
 
 	case QAWS_CURVE_KIND_YUKSEL:
+	case QAWS_CURVE_KIND_RATIONAL_BEZIER:
+	case QAWS_CURVE_KIND_COMPOSITE:
+	case QAWS_CURVE_KIND_ARC:
+	case QAWS_CURVE_KIND_POLYNOMIAL:
+	case QAWS_CURVE_KIND_CLOTHOID:
+	case QAWS_CURVE_KIND_SUBDIVISION:
 		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 
 	default:

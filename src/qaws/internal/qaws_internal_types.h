@@ -148,4 +148,14 @@ typedef struct qaws_yuksel_impl
 	qaws_yuksel_subcurve* subcurves;
 } qaws_yuksel_impl;
 
+/* --- Phase 8: New curve families --- */
+
+typedef struct qaws_rational_bezier_impl
+{
+	qaws_scalar* control_points;
+	unsigned int control_point_count;
+	qaws_scalar* weights;
+	qaws_scalar* weighted_points; /* homogeneous: (w*x, w*y, [w*z], w) per point */
+} qaws_rational_bezier_impl;
+
 #endif /* QAWS_INTERNAL_TYPES_H */

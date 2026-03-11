@@ -8902,6 +8902,1364 @@ si_end:;
 	printf("  -> " SVG_OUTPUT_DIR "/offset_selfintersect.svg\n");
 }
 
+/* ========================================================================== */
+/*  Phase 8: New curve family tests                                           */
+/* ========================================================================== */
+
+static void test_rational_bezier(void)
+{
+	printf("test_rational_bezier\n");
+
+	/* Quadratic rational Bezier: exact circle arc (quarter circle) */
+	{
+		qaws_scalar cp[] = { 1, 0,   1, 1,   0, 1 };
+		qaws_scalar w[] = { 1, (qaws_scalar)0.70710678118, 1 }; /* 1, 1/sqrt(2), 1 */
+		qaws_rational_bezier_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+		qaws_scalar dist;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 2;
+		desc.control_points = cp;
+		desc.control_point_count = 3;
+		desc.weights = w;
+		desc.weight_count = 3;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_rational_bezier(&desc, &crv));
+		TEST_ASSERT(crv != NULL, "rational bezier created");
+		TEST_ASSERT(qaws_curve_get_kind(crv) == QAWS_CURVE_KIND_RATIONAL_BEZIER,
+			"rational bezier kind");
+		TEST_ASSERT(qaws_curve_get_degree(crv) == 2, "rational bezier degree");
+
+		/* At t=0: should be (1,0) */
+		qaws_curve_evaluate_2d(crv, 0, QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 1) && approx_eq(r.position.y, 0),
+			"rational bezier start point");
+		/* D1 at start should be tangent to circle: direction (0,1) */
+		TEST_ASSERT(r.d1.x < (qaws_scalar)0.01, "rbez d1.x near zero at start");
+		TEST_ASSERT(r.d1.y > (qaws_scalar)0.1, "rbez d1.y positive at start");
+
+		/* At t=1: should be (0,1) */
+		qaws_curve_evaluate_2d(crv, 1, QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 0) && approx_eq(r.position.y, 1),
+			"rational bezier end point");
+		/* D1 at end: tangent direction (-1, 0) */
+		TEST_ASSERT(r.d1.x < (qaws_scalar)-0.1, "rbez d1.x negative at end");
+
+		/* At t=0.5: should be on unit circle */
+		qaws_curve_evaluate_2d(crv, (qaws_scalar)0.5,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &r);
+		dist = (qaws_scalar)sqrt((double)(r.position.x * r.position.x + r.position.y * r.position.y));
+		TEST_ASSERT(approx_eq(dist, 1), "rational bezier midpoint on circle");
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D2, "rbez d2 valid");
+
+		/* Multiple points along the arc should all be on unit circle */
+		{
+			unsigned int i;
+			int all_on_circle = 1;
+			for (i = 1; i < 10; ++i)
+			{
+				qaws_scalar t = (qaws_scalar)i / (qaws_scalar)10;
+				qaws_curve_evaluate_2d(crv, t, QAWS_EVAL_FLAG_POSITION, &r);
+				dist = (qaws_scalar)sqrt((double)(r.position.x * r.position.x + r.position.y * r.position.y));
+				if (!approx_eq(dist, 1)) all_on_circle = 0;
+			}
+			TEST_ASSERT(all_on_circle, "rbez all samples on unit circle");
+		}
+
+		/* is_rational should return 1 */
+		TEST_ASSERT(qaws_curve_is_rational(crv) == 1, "rational bezier is_rational");
+		TEST_ASSERT(qaws_curve_is_closed(crv) == 0, "rational bezier not closed");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Error handling: NULL desc */
+	{
+		qaws_curve *crv = NULL;
+		TEST_ASSERT(qaws_curve_create_rational_bezier(NULL, &crv) != QAWS_STATUS_OK,
+			"rbez null desc rejected");
+	}
+
+	/* 3D rational Bezier */
+	{
+		qaws_scalar cp3d[] = { 1,0,0,  1,1,0,  0,1,0 };
+		qaws_scalar w3d[] = { 1, (qaws_scalar)0.70710678118, 1 };
+		qaws_rational_bezier_desc desc3d;
+		qaws_curve *crv3d = NULL;
+		qaws_eval_result_3d r3d;
+
+		memset(&desc3d, 0, sizeof(desc3d));
+		desc3d.dimension = QAWS_DIMENSION_3D;
+		desc3d.degree = 2;
+		desc3d.control_points = cp3d;
+		desc3d.control_point_count = 3;
+		desc3d.weights = w3d;
+		desc3d.weight_count = 3;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_rational_bezier(&desc3d, &crv3d));
+		TEST_ASSERT(qaws_curve_get_dimension(crv3d) == QAWS_DIMENSION_3D,
+			"rbez 3d dimension");
+
+		qaws_curve_evaluate_3d(crv3d, (qaws_scalar)0.5,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &r3d);
+		TEST_ASSERT(r3d.valid_flags & QAWS_EVAL_FLAG_POSITION, "rational bezier 3d pos");
+		TEST_ASSERT(r3d.valid_flags & QAWS_EVAL_FLAG_D1, "rational bezier 3d d1");
+		TEST_ASSERT(r3d.valid_flags & QAWS_EVAL_FLAG_D2, "rational bezier 3d d2");
+		/* z should be 0 since all points are in z=0 plane */
+		TEST_ASSERT(approx_eq(r3d.position.z, 0), "rbez 3d z=0");
+
+		qaws_curve_destroy(crv3d);
+	}
+}
+
+static void test_composite(void)
+{
+	printf("test_composite\n");
+
+	/* Chain two Bezier segments into a composite */
+	{
+		qaws_scalar cp1[] = { 0,0, 1,1 };
+		qaws_scalar cp2[] = { 1,1, 2,0 };
+		qaws_bezier_desc bd1, bd2;
+		qaws_curve *seg1 = NULL, *seg2 = NULL, *comp = NULL;
+		qaws_composite_desc cd;
+		qaws_curve *segs[2];
+		qaws_eval_result_2d r;
+
+		memset(&bd1, 0, sizeof(bd1));
+		bd1.dimension = QAWS_DIMENSION_2D;
+		bd1.degree = 1;
+		bd1.control_points = cp1;
+		bd1.control_point_count = 2;
+
+		memset(&bd2, 0, sizeof(bd2));
+		bd2.dimension = QAWS_DIMENSION_2D;
+		bd2.degree = 1;
+		bd2.control_points = cp2;
+		bd2.control_point_count = 2;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_bezier(&bd1, &seg1));
+		TEST_ASSERT_STATUS(qaws_curve_create_bezier(&bd2, &seg2));
+
+		segs[0] = seg1;
+		segs[1] = seg2;
+
+		memset(&cd, 0, sizeof(cd));
+		cd.dimension = QAWS_DIMENSION_2D;
+		cd.segments = segs;
+		cd.segment_count = 2;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_composite(&cd, &comp));
+		TEST_ASSERT(comp != NULL, "composite created");
+		TEST_ASSERT(qaws_curve_get_kind(comp) == QAWS_CURVE_KIND_COMPOSITE,
+			"composite kind");
+		TEST_ASSERT(qaws_curve_get_span_count(comp) == 2, "composite span_count");
+
+		/* Range should be [0, 2] */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(comp);
+			TEST_ASSERT(approx_eq(rng.min_value, 0), "composite range min");
+			TEST_ASSERT(approx_eq(rng.max_value, 2), "composite range max");
+		}
+
+		/* t=0: start of first segment = (0,0) */
+		qaws_curve_evaluate_2d(comp, 0, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 0) && approx_eq(r.position.y, 0),
+			"composite start");
+
+		/* t=1: end of first segment / start of second = (1,1) */
+		qaws_curve_evaluate_2d(comp, 1, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 1) && approx_eq(r.position.y, 1),
+			"composite junction");
+
+		/* t=2: end = (2,0) */
+		qaws_curve_evaluate_2d(comp, 2, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 2) && approx_eq(r.position.y, 0),
+			"composite end");
+
+		/* Derivatives: linear segments have constant D1 */
+		qaws_curve_evaluate_2d(comp, (qaws_scalar)0.5,
+			QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2, &r);
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D1, "composite d1 valid");
+		/* D1 of first segment (0,0)->(1,1) should be (1,1) scaled by chain rule */
+		TEST_ASSERT(approx_eq(r.d1.x, 1) && approx_eq(r.d1.y, 1),
+			"composite d1 first seg");
+
+		qaws_curve_evaluate_2d(comp, (qaws_scalar)1.5,
+			QAWS_EVAL_FLAG_D1, &r);
+		/* D1 of second segment (1,1)->(2,0) should be (1,-1) */
+		TEST_ASSERT(approx_eq(r.d1.x, 1) && approx_eq(r.d1.y, -1),
+			"composite d1 second seg");
+
+		/* Not closed (start != end) */
+		TEST_ASSERT(qaws_curve_get_continuity(comp) == QAWS_CONTINUITY_C0,
+			"composite continuity C0");
+
+		qaws_curve_destroy(comp); /* destroys seg1, seg2 too */
+	}
+
+	/* Error handling: NULL desc */
+	{
+		qaws_curve *crv = NULL;
+		TEST_ASSERT(qaws_curve_create_composite(NULL, &crv) != QAWS_STATUS_OK,
+			"composite null desc rejected");
+	}
+}
+
+static void test_arc(void)
+{
+	printf("test_arc\n");
+
+	/* Single quarter-circle arc */
+	{
+		qaws_arc_segment seg;
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+		qaws_scalar dist;
+		qaws_range rng;
+
+		memset(&seg, 0, sizeof(seg));
+		seg.center[0] = 0; seg.center[1] = 0;
+		seg.radius = 1;
+		seg.angle_start = 0;
+		seg.angle_end = (qaws_scalar)1.5707963268; /* pi/2 */
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = &seg;
+		desc.segment_count = 1;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_arc(&desc, &crv));
+		TEST_ASSERT(crv != NULL, "arc created");
+		TEST_ASSERT(qaws_curve_get_kind(crv) == QAWS_CURVE_KIND_ARC, "arc kind");
+
+		/* Arc length should be pi/2 */
+		rng = qaws_curve_get_parameter_range(crv);
+		TEST_ASSERT(approx_eq(rng.max_value, (qaws_scalar)1.5707963268),
+			"arc parameter range = arc length");
+
+		/* t=0 (local_t=0): (1, 0) */
+		qaws_curve_evaluate_2d(crv, 0, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 1) && approx_eq(r.position.y, 0),
+			"arc start point");
+
+		/* t=max (local_t=1): (0, 1) */
+		qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 0) && approx_eq(r.position.y, 1),
+			"arc end point");
+
+		/* Midpoint should be on unit circle */
+		qaws_curve_evaluate_2d(crv, rng.max_value * (qaws_scalar)0.5,
+			QAWS_EVAL_FLAG_POSITION, &r);
+		dist = (qaws_scalar)sqrt((double)(r.position.x * r.position.x + r.position.y * r.position.y));
+		TEST_ASSERT(approx_eq(dist, 1), "arc midpoint on circle");
+
+		/* All sampled points on unit circle */
+		{
+			unsigned int i;
+			int all_on = 1;
+			for (i = 0; i <= 20; ++i)
+			{
+				qaws_scalar t = rng.max_value * (qaws_scalar)i / (qaws_scalar)20;
+				qaws_curve_evaluate_2d(crv, t, QAWS_EVAL_FLAG_POSITION, &r);
+				dist = (qaws_scalar)sqrt((double)(r.position.x * r.position.x + r.position.y * r.position.y));
+				if (!approx_eq(dist, 1)) all_on = 0;
+			}
+			TEST_ASSERT(all_on, "arc all samples on unit circle");
+		}
+
+		/* Derivatives at start: D1 should be tangent (0, sweep*r) direction */
+		qaws_curve_evaluate_2d(crv, 0,
+			QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3, &r);
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D1, "arc d1 valid");
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D2, "arc d2 valid");
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D3, "arc d3 valid");
+		/* At theta=0 on unit circle: D1 direction is (0, 1) * sweep * r */
+		TEST_ASSERT(approx_eq(r.d1.x, 0), "arc d1.x at start");
+		TEST_ASSERT(r.d1.y > 0, "arc d1.y positive at start");
+		/* D2 points inward: (-1, 0) direction * sweep^2 * r */
+		TEST_ASSERT(r.d2.x < 0, "arc d2.x negative at start");
+
+		/* is_rational should return 1 */
+		TEST_ASSERT(qaws_curve_is_rational(crv) == 1, "arc is_rational");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Multi-segment: two quarter arcs forming a half circle */
+	{
+		qaws_scalar pi_half = (qaws_scalar)1.5707963268;
+		qaws_arc_segment segs[2];
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_range rng;
+		qaws_eval_result_2d r;
+
+		memset(segs, 0, sizeof(segs));
+		segs[0].center[0] = 0; segs[0].center[1] = 0;
+		segs[0].radius = 1;
+		segs[0].angle_start = 0;
+		segs[0].angle_end = pi_half;
+
+		segs[1].center[0] = 0; segs[1].center[1] = 0;
+		segs[1].radius = 1;
+		segs[1].angle_start = pi_half;
+		segs[1].angle_end = pi_half * 2;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = segs;
+		desc.segment_count = 2;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_arc(&desc, &crv));
+		TEST_ASSERT(qaws_curve_get_span_count(crv) == 2, "arc 2-span count");
+
+		rng = qaws_curve_get_parameter_range(crv);
+		/* Total arc length = pi */
+		TEST_ASSERT(approx_eq(rng.max_value, pi_half * 2), "arc half-circle length");
+
+		/* End point should be (-1, 0) */
+		qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, -1), "arc half end x");
+		TEST_ASSERT(approx_eq(r.position.y, 0), "arc half end y");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Error: zero radius */
+	{
+		qaws_arc_segment seg;
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&seg, 0, sizeof(seg));
+		seg.radius = 0;
+		seg.angle_start = 0;
+		seg.angle_end = 1;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = &seg;
+		desc.segment_count = 1;
+		TEST_ASSERT(qaws_curve_create_arc(&desc, &crv) != QAWS_STATUS_OK,
+			"arc zero radius rejected");
+	}
+
+	/* 3D arc */
+	{
+		qaws_arc_segment seg3d;
+		qaws_arc_desc desc3d;
+		qaws_curve *crv3d = NULL;
+		qaws_eval_result_3d r3d;
+		qaws_scalar dist;
+
+		memset(&seg3d, 0, sizeof(seg3d));
+		seg3d.center[0] = 0; seg3d.center[1] = 0; seg3d.center[2] = 0;
+		seg3d.radius = 1;
+		seg3d.angle_start = 0;
+		seg3d.angle_end = (qaws_scalar)1.5707963268;
+		seg3d.axis_u[0] = 1; seg3d.axis_u[1] = 0; seg3d.axis_u[2] = 0;
+		seg3d.axis_v[0] = 0; seg3d.axis_v[1] = 0; seg3d.axis_v[2] = 1;
+
+		memset(&desc3d, 0, sizeof(desc3d));
+		desc3d.dimension = QAWS_DIMENSION_3D;
+		desc3d.segments = &seg3d;
+		desc3d.segment_count = 1;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_arc(&desc3d, &crv3d));
+		qaws_curve_evaluate_3d(crv3d, 0, QAWS_EVAL_FLAG_POSITION, &r3d);
+		TEST_ASSERT(approx_eq(r3d.position.x, 1) && approx_eq(r3d.position.z, 0),
+			"3d arc start");
+
+		/* End: (0, 0, 1) in XZ plane */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv3d);
+			qaws_curve_evaluate_3d(crv3d, rng.max_value,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r3d);
+			TEST_ASSERT(approx_eq(r3d.position.x, 0), "3d arc end x");
+			TEST_ASSERT(approx_eq(r3d.position.z, 1), "3d arc end z");
+			TEST_ASSERT(approx_eq(r3d.position.y, 0), "3d arc y=0 plane");
+			/* 3D arc on circle: all points at unit distance from center */
+			dist = (qaws_scalar)sqrt((double)(
+				r3d.position.x * r3d.position.x +
+				r3d.position.y * r3d.position.y +
+				r3d.position.z * r3d.position.z));
+			TEST_ASSERT(approx_eq(dist, 1), "3d arc end on unit sphere");
+		}
+
+		qaws_curve_destroy(crv3d);
+	}
+}
+
+static void test_polynomial(void)
+{
+	printf("test_polynomial\n");
+
+	/* Linear: P(t) = (t, 2t), t in [0, 1] */
+	{
+		qaws_scalar coeffs[] = { 0, 0,   1, 2 }; /* c0=(0,0), c1=(1,2) */
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 1;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 2;
+		desc.t_min = 0;
+		desc.t_max = 1;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_polynomial(&desc, &crv));
+		TEST_ASSERT(qaws_curve_get_kind(crv) == QAWS_CURVE_KIND_POLYNOMIAL, "poly kind");
+		TEST_ASSERT(qaws_curve_is_rational(crv) == 0, "poly not rational");
+
+		qaws_curve_evaluate_2d(crv, (qaws_scalar)0.5, QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r);
+		TEST_ASSERT(approx_eq(r.position.x, (qaws_scalar)0.5) && approx_eq(r.position.y, 1),
+			"poly linear pos at 0.5");
+		TEST_ASSERT(approx_eq(r.d1.x, 1) && approx_eq(r.d1.y, 2),
+			"poly linear d1");
+
+		/* Endpoints */
+		qaws_curve_evaluate_2d(crv, 0, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 0) && approx_eq(r.position.y, 0),
+			"poly linear start");
+		qaws_curve_evaluate_2d(crv, 1, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 1) && approx_eq(r.position.y, 2),
+			"poly linear end");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Cubic: P(t) = (t^3, t^2), t in [0, 1] */
+	{
+		qaws_scalar coeffs[] = { 0,0,  0,0,  0,1,  1,0 }; /* c0,c1,c2,c3 */
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 3;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 4;
+		desc.t_min = 0;
+		desc.t_max = 1;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_polynomial(&desc, &crv));
+
+		qaws_curve_evaluate_2d(crv, 1, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 1) && approx_eq(r.position.y, 1),
+			"poly cubic at t=1");
+
+		qaws_curve_evaluate_2d(crv, (qaws_scalar)0.5,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3, &r);
+		TEST_ASSERT(approx_eq(r.position.x, (qaws_scalar)0.125), "poly cubic x at 0.5");
+		TEST_ASSERT(approx_eq(r.position.y, (qaws_scalar)0.25), "poly cubic y at 0.5");
+		/* D1 of (t^3, t^2) = (3t^2, 2t), at t=0.5 => (0.75, 1.0) */
+		TEST_ASSERT(approx_eq(r.d1.x, (qaws_scalar)0.75), "poly cubic d1.x at 0.5");
+		TEST_ASSERT(approx_eq(r.d1.y, (qaws_scalar)1.0), "poly cubic d1.y at 0.5");
+		/* D2 = (6t, 2), at t=0.5 => (3, 2) */
+		TEST_ASSERT(approx_eq(r.d2.x, (qaws_scalar)3.0), "poly cubic d2.x at 0.5");
+		TEST_ASSERT(approx_eq(r.d2.y, (qaws_scalar)2.0), "poly cubic d2.y at 0.5");
+		/* D3 = (6, 0) */
+		TEST_ASSERT(approx_eq(r.d3.x, (qaws_scalar)6.0), "poly cubic d3.x");
+		TEST_ASSERT(approx_eq(r.d3.y, (qaws_scalar)0.0), "poly cubic d3.y");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Non-unit parameter range: t in [-1, 1] */
+	{
+		/* P(t) = (t, t^2): parabola */
+		qaws_scalar coeffs[] = { 0, 0,   1, 0,   0, 1 };
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 2;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 3;
+		desc.t_min = -1;
+		desc.t_max = 1;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_polynomial(&desc, &crv));
+
+		/* At global param -1 (start): should be (-1, 1) */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_curve_evaluate_2d(crv, rng.min_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(approx_eq(r.position.x, -1), "poly parabola start x");
+			TEST_ASSERT(approx_eq(r.position.y, 1), "poly parabola start y");
+
+			/* At global param 1 (end): (1, 1) */
+			qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(approx_eq(r.position.x, 1), "poly parabola end x");
+			TEST_ASSERT(approx_eq(r.position.y, 1), "poly parabola end y");
+		}
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Error: NULL desc */
+	{
+		qaws_curve *crv = NULL;
+		TEST_ASSERT(qaws_curve_create_polynomial(NULL, &crv) != QAWS_STATUS_OK,
+			"poly null desc rejected");
+	}
+}
+
+static void test_clothoid(void)
+{
+	printf("test_clothoid\n");
+
+	/* Straight line clothoid: kappa0 = kappa1 = 0 */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.origin_x = 0;
+		desc.origin_y = 0;
+		desc.start_angle = 0; /* heading along +x */
+		desc.start_curvature = 0;
+		desc.end_curvature = 0;
+		desc.length = 2;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_clothoid(&desc, &crv));
+		TEST_ASSERT(crv != NULL, "clothoid created");
+		TEST_ASSERT(qaws_curve_get_kind(crv) == QAWS_CURVE_KIND_CLOTHOID, "clothoid kind");
+		TEST_ASSERT(qaws_curve_is_rational(crv) == 0, "clothoid not rational");
+		TEST_ASSERT(qaws_curve_get_dimension(crv) == QAWS_DIMENSION_2D, "clothoid 2d");
+
+		/* At start: origin */
+		qaws_curve_evaluate_2d(crv, 0, QAWS_EVAL_FLAG_POSITION, &r);
+		TEST_ASSERT(approx_eq(r.position.x, 0) && approx_eq(r.position.y, 0),
+			"clothoid start");
+
+		/* At end (s=2): should be at (2, 0) for zero curvature heading +x */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			TEST_ASSERT(approx_eq(rng.max_value, 2), "clothoid range = length");
+			qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(approx_eq(r.position.x, 2) && approx_eq(r.position.y, 0),
+				"clothoid straight line end");
+		}
+
+		/* D1 for straight line: constant (L*cos(0), L*sin(0)) = (2, 0) */
+		qaws_curve_evaluate_2d(crv, 0, QAWS_EVAL_FLAG_D1, &r);
+		TEST_ASSERT(approx_eq(r.d1.x, 2), "clothoid straight d1.x");
+		TEST_ASSERT(approx_eq(r.d1.y, 0), "clothoid straight d1.y");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Circular arc clothoid: kappa0 = kappa1 = 1 (radius 1 circle) */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+		qaws_scalar pi_half = (qaws_scalar)1.5707963268;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.origin_x = 0;
+		desc.origin_y = 0;
+		desc.start_angle = 0;
+		desc.start_curvature = 1;
+		desc.end_curvature = 1;
+		desc.length = pi_half; /* quarter circle */
+
+		TEST_ASSERT_STATUS(qaws_curve_create_clothoid(&desc, &crv));
+
+		/* End point: (sin(pi/2), 1-cos(pi/2)) = (1, 1) */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(approx_eq(r.position.x, 1), "clothoid circle x");
+			TEST_ASSERT(approx_eq(r.position.y, 1), "clothoid circle y");
+		}
+
+		/* D1 at start = L * (cos(0), sin(0)) = (pi/2, 0) */
+		qaws_curve_evaluate_2d(crv, 0,
+			QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3, &r);
+		TEST_ASSERT(approx_eq(r.d1.x, pi_half), "clothoid d1.x at start");
+		TEST_ASSERT(approx_eq(r.d1.y, 0), "clothoid d1.y at start");
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D2, "clothoid d2 valid");
+		TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D3, "clothoid d3 valid");
+		/* D2 at start: L^2 * kappa * (-sin(0), cos(0)) = L^2 * 1 * (0, 1) */
+		TEST_ASSERT(approx_eq(r.d2.x, 0), "clothoid d2.x at start");
+		TEST_ASSERT(r.d2.y > 0, "clothoid d2.y positive at start");
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* 3D clothoid should fail (2D only) */
+	{
+		qaws_eval_result_3d r3d;
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.start_curvature = 0;
+		desc.end_curvature = 1;
+		desc.length = 1;
+
+		qaws_curve_create_clothoid(&desc, &crv);
+		if (crv)
+		{
+			qaws_status s = qaws_curve_evaluate_3d(crv, 0, QAWS_EVAL_FLAG_POSITION, &r3d);
+			TEST_ASSERT(s != QAWS_STATUS_OK, "clothoid 3d eval rejected");
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Error: zero length */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.length = 0;
+		TEST_ASSERT(qaws_curve_create_clothoid(&desc, &crv) != QAWS_STATUS_OK,
+			"clothoid zero length rejected");
+	}
+}
+
+static void test_subdivision(void)
+{
+	printf("test_subdivision\n");
+
+	/* Open Chaikin subdivision */
+	{
+		qaws_scalar cp[] = { 0,0,  1,2,  3,1,  4,0 };
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_CHAIKIN;
+		desc.control_points = cp;
+		desc.control_point_count = 4;
+		desc.closed = 0;
+		desc.refinement_levels = 5;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_subdivision(&desc, &crv));
+		TEST_ASSERT(crv != NULL, "subdivision chaikin created");
+		TEST_ASSERT(qaws_curve_get_kind(crv) == QAWS_CURVE_KIND_SUBDIVISION,
+			"subdivision kind");
+		TEST_ASSERT(qaws_curve_get_continuity(crv) == QAWS_CONTINUITY_C1,
+			"chaikin continuity C1");
+		TEST_ASSERT(qaws_curve_is_closed(crv) == 0, "subdivision open not closed");
+
+		/* Endpoints should be near original endpoints */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_curve_evaluate_2d(crv, rng.min_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(r.position.x >= -1 && r.position.x <= 1, "subdivision start x plausible");
+
+			qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r);
+			TEST_ASSERT(r.position.x >= 3 && r.position.x <= 5, "subdivision end x plausible");
+		}
+
+		/* Should support all derivatives */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_scalar mid = (rng.min_value + rng.max_value) * (qaws_scalar)0.5;
+			qaws_curve_evaluate_2d(crv, mid,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3, &r);
+			TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D1, "subdivision d1 valid");
+			TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D2, "subdivision d2 valid");
+			TEST_ASSERT(r.valid_flags & QAWS_EVAL_FLAG_D3, "subdivision d3 valid");
+			/* D1 should point generally in +x direction */
+			TEST_ASSERT(r.d1.x > 0, "subdivision d1.x positive at mid");
+		}
+
+		/* Smoothness: sample the curve and check it has no big jumps */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_eval_result_2d prev, curr;
+			unsigned int i;
+			int smooth = 1;
+			qaws_curve_evaluate_2d(crv, rng.min_value, QAWS_EVAL_FLAG_POSITION, &prev);
+			for (i = 1; i <= 50; ++i)
+			{
+				qaws_scalar t = rng.min_value + (rng.max_value - rng.min_value) * (qaws_scalar)i / (qaws_scalar)50;
+				qaws_scalar dx, dy, jump;
+				qaws_curve_evaluate_2d(crv, t, QAWS_EVAL_FLAG_POSITION, &curr);
+				dx = curr.position.x - prev.position.x;
+				dy = curr.position.y - prev.position.y;
+				jump = (qaws_scalar)sqrt((double)(dx * dx + dy * dy));
+				if (jump > (qaws_scalar)0.5) smooth = 0;
+				prev = curr;
+			}
+			TEST_ASSERT(smooth, "subdivision chaikin smooth curve");
+		}
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Closed Lane-Riesenfeld (cubic) */
+	{
+		qaws_scalar cp[] = { 0,0,  2,0,  2,2,  0,2 };
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		qaws_eval_result_2d r_start, r_end;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_LANE_RIESENFELD_3;
+		desc.control_points = cp;
+		desc.control_point_count = 4;
+		desc.closed = 1;
+		desc.refinement_levels = 5;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_subdivision(&desc, &crv));
+		TEST_ASSERT(qaws_curve_is_closed(crv) == 1, "subdivision closed");
+		TEST_ASSERT(qaws_curve_get_continuity(crv) == QAWS_CONTINUITY_C2,
+			"subdivision lr3 continuity");
+
+		/* Closed: start and end should match */
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv);
+			qaws_curve_evaluate_2d(crv, rng.min_value, QAWS_EVAL_FLAG_POSITION, &r_start);
+			qaws_curve_evaluate_2d(crv, rng.max_value, QAWS_EVAL_FLAG_POSITION, &r_end);
+			TEST_ASSERT(
+				approx_eq(r_start.position.x, r_end.position.x) &&
+				approx_eq(r_start.position.y, r_end.position.y),
+				"subdivision closed start==end");
+		}
+
+		qaws_curve_destroy(crv);
+	}
+
+	/* Lane-Riesenfeld order 4 */
+	{
+		qaws_scalar cp[] = { 0,0,  1,2,  3,1,  4,0 };
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_LANE_RIESENFELD_4;
+		desc.control_points = cp;
+		desc.control_point_count = 4;
+		desc.closed = 0;
+		desc.refinement_levels = 5;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_subdivision(&desc, &crv));
+		TEST_ASSERT(qaws_curve_get_continuity(crv) == QAWS_CONTINUITY_C3,
+			"subdivision lr4 continuity C3");
+		qaws_curve_destroy(crv);
+	}
+
+	/* 3D subdivision */
+	{
+		qaws_scalar cp3d[] = { 0,0,0,  1,1,1,  2,0,2,  3,1,0 };
+		qaws_subdivision_desc desc3d;
+		qaws_curve *crv3d = NULL;
+		qaws_eval_result_3d r3d;
+
+		memset(&desc3d, 0, sizeof(desc3d));
+		desc3d.dimension = QAWS_DIMENSION_3D;
+		desc3d.scheme = QAWS_SUBDIVISION_CHAIKIN;
+		desc3d.control_points = cp3d;
+		desc3d.control_point_count = 4;
+		desc3d.closed = 0;
+		desc3d.refinement_levels = 4;
+
+		TEST_ASSERT_STATUS(qaws_curve_create_subdivision(&desc3d, &crv3d));
+		{
+			qaws_range rng = qaws_curve_get_parameter_range(crv3d);
+			qaws_scalar mid = (rng.min_value + rng.max_value) * (qaws_scalar)0.5;
+			qaws_curve_evaluate_3d(crv3d, mid,
+				QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &r3d);
+			TEST_ASSERT(r3d.valid_flags & QAWS_EVAL_FLAG_POSITION, "subdivision 3d pos");
+			TEST_ASSERT(r3d.valid_flags & QAWS_EVAL_FLAG_D1, "subdivision 3d d1");
+		}
+
+		qaws_curve_destroy(crv3d);
+	}
+}
+
+/* ========================================================================== */
+/*  Phase 8: SVG visual tests                                                */
+/* ========================================================================== */
+
+static void test_svg_rational_bezier(void)
+{
+	printf("test_svg_rational_bezier\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/rational_bezier.svg",
+		(qaws_scalar)-0.5, (qaws_scalar)-0.5, (qaws_scalar)2.5, (qaws_scalar)2.5,
+		(qaws_scalar)500, (qaws_scalar)500))
+		return;
+
+	/* Draw several rational Bezier quarter-circle arcs with different weights */
+	{
+		static const qaws_scalar weights[] = {
+			(qaws_scalar)0.3, (qaws_scalar)0.70710678118, (qaws_scalar)1.0, (qaws_scalar)2.0
+		};
+		static const char* colors[] = { "#6272a4", "#e94560", "#50fa7b", "#f5a623" };
+		unsigned int wi;
+
+		for (wi = 0; wi < 4; ++wi)
+		{
+			qaws_scalar cp[] = { 1, 0,   1, 1,   0, 1 };
+			qaws_scalar w[] = { 1, 0, 1 };
+			qaws_rational_bezier_desc desc;
+			qaws_curve *crv = NULL;
+
+			w[1] = weights[wi];
+			memset(&desc, 0, sizeof(desc));
+			desc.dimension = QAWS_DIMENSION_2D;
+			desc.degree = 2;
+			desc.control_points = cp;
+			desc.control_point_count = 3;
+			desc.weights = w;
+			desc.weight_count = 3;
+
+			if (qaws_curve_create_rational_bezier(&desc, &crv) == QAWS_STATUS_OK)
+			{
+				qaws_vec2 buf[SVG_SAMPLES];
+				unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+				svg_polyline(&svg, buf, n, colors[wi], (qaws_scalar)2.0);
+				qaws_curve_destroy(crv);
+			}
+		}
+	}
+
+	/* Control polygon */
+	{
+		qaws_vec2 cp_vis[] = { {1,0}, {1,1}, {0,1} };
+		svg_polyline(&svg, cp_vis, 3, "#ffffff30", (qaws_scalar)1.0);
+		svg_dots(&svg, cp_vis, 3, "#ffffff60", (qaws_scalar)3);
+	}
+
+	svg_label(&svg, (qaws_scalar)-0.3, (qaws_scalar)2.2,
+		"Rational Bezier: w=0.3 0.707 1.0 2.0", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/rational_bezier.svg\n");
+}
+
+static void test_svg_composite(void)
+{
+	printf("test_svg_composite\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/composite.svg",
+		(qaws_scalar)-1.0, (qaws_scalar)-1.5, (qaws_scalar)7.0, (qaws_scalar)5.0,
+		(qaws_scalar)600, (qaws_scalar)430))
+		return;
+
+	/* Composite: Bezier S-curve + Hermite loop + linear segment */
+	{
+		qaws_vec2 cp1[] = { {0,0}, {0,2}, {2,2}, {2,0} };
+		qaws_bezier_desc bd;
+		qaws_curve *seg1 = NULL;
+		memset(&bd, 0, sizeof(bd));
+		bd.dimension = QAWS_DIMENSION_2D;
+		bd.degree = 3;
+		bd.control_points = cp1;
+		bd.control_point_count = 4;
+		qaws_curve_create_bezier(&bd, &seg1);
+
+		qaws_vec2 hp[] = { {2,0}, {4,2} };
+		qaws_vec2 ht[] = { {2,2}, {2,-2} };
+		qaws_hermite_desc hd;
+		qaws_curve *seg2 = NULL;
+		memset(&hd, 0, sizeof(hd));
+		hd.dimension = QAWS_DIMENSION_2D;
+		hd.degree = 3;
+		hd.points = hp;
+		hd.derivatives = ht;
+		hd.point_count = 2;
+		hd.derivative_count = 2;
+		qaws_curve_create_hermite(&hd, &seg2);
+
+		qaws_vec2 cp3[] = { {4,2}, {5,0} };
+		qaws_bezier_desc bd3;
+		qaws_curve *seg3 = NULL;
+		memset(&bd3, 0, sizeof(bd3));
+		bd3.dimension = QAWS_DIMENSION_2D;
+		bd3.degree = 1;
+		bd3.control_points = cp3;
+		bd3.control_point_count = 2;
+		qaws_curve_create_bezier(&bd3, &seg3);
+
+		if (seg1 && seg2 && seg3)
+		{
+			qaws_curve *segs[3];
+			qaws_composite_desc cd;
+			qaws_curve *comp = NULL;
+
+			segs[0] = seg1; segs[1] = seg2; segs[2] = seg3;
+			memset(&cd, 0, sizeof(cd));
+			cd.dimension = QAWS_DIMENSION_2D;
+			cd.segments = segs;
+			cd.segment_count = 3;
+
+			if (qaws_curve_create_composite(&cd, &comp) == QAWS_STATUS_OK)
+			{
+				qaws_vec2 buf[SVG_SAMPLES];
+				unsigned int n = svg_sample_curve(comp, buf, SVG_SAMPLES);
+				svg_polyline(&svg, buf, n, "#e94560", (qaws_scalar)2.5);
+
+				/* Mark segment boundaries */
+				{
+					qaws_eval_result_2d r;
+					qaws_curve_evaluate_2d(comp, 0, QAWS_EVAL_FLAG_POSITION, &r);
+					svg_dot(&svg, r.position.x, r.position.y, "#50fa7b", (qaws_scalar)5);
+					qaws_curve_evaluate_2d(comp, 1, QAWS_EVAL_FLAG_POSITION, &r);
+					svg_dot(&svg, r.position.x, r.position.y, "#f5a623", (qaws_scalar)5);
+					qaws_curve_evaluate_2d(comp, 2, QAWS_EVAL_FLAG_POSITION, &r);
+					svg_dot(&svg, r.position.x, r.position.y, "#f5a623", (qaws_scalar)5);
+					qaws_curve_evaluate_2d(comp, 3, QAWS_EVAL_FLAG_POSITION, &r);
+					svg_dot(&svg, r.position.x, r.position.y, "#50fa7b", (qaws_scalar)5);
+				}
+				qaws_curve_destroy(comp);
+			}
+			else
+			{
+				qaws_curve_destroy(seg1);
+				qaws_curve_destroy(seg2);
+				qaws_curve_destroy(seg3);
+			}
+		}
+	}
+
+	svg_label(&svg, (qaws_scalar)-0.5, (qaws_scalar)3.0,
+		"Composite: Bezier + Hermite + Linear", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/composite.svg\n");
+}
+
+static void test_svg_arc(void)
+{
+	printf("test_svg_arc\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/arc.svg",
+		(qaws_scalar)-2.5, (qaws_scalar)-2.5, (qaws_scalar)5.0, (qaws_scalar)5.0,
+		(qaws_scalar)500, (qaws_scalar)500))
+		return;
+
+	/* Full circle from 4 quarter arcs */
+	{
+		qaws_scalar pi = (qaws_scalar)3.14159265358979;
+		qaws_arc_segment segs[4];
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+		unsigned int i;
+
+		for (i = 0; i < 4; ++i)
+		{
+			memset(&segs[i], 0, sizeof(segs[i]));
+			segs[i].center[0] = 0; segs[i].center[1] = 0;
+			segs[i].radius = 2;
+			segs[i].angle_start = pi * (qaws_scalar)0.5 * (qaws_scalar)i;
+			segs[i].angle_end = pi * (qaws_scalar)0.5 * (qaws_scalar)(i + 1);
+		}
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = segs;
+		desc.segment_count = 4;
+
+		if (qaws_curve_create_arc(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#e94560", (qaws_scalar)2.5);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Smaller arc with different radius */
+	{
+		qaws_arc_segment seg;
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&seg, 0, sizeof(seg));
+		seg.center[0] = 0; seg.center[1] = 0;
+		seg.radius = 1;
+		seg.angle_start = (qaws_scalar)0.5;
+		seg.angle_end = (qaws_scalar)4.0;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = &seg;
+		desc.segment_count = 1;
+
+		if (qaws_curve_create_arc(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#50fa7b", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	svg_label(&svg, (qaws_scalar)-2.2, (qaws_scalar)2.2,
+		"Piecewise Circular Arcs", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/arc.svg\n");
+}
+
+static void test_svg_polynomial(void)
+{
+	printf("test_svg_polynomial\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/polynomial.svg",
+		(qaws_scalar)-0.5, (qaws_scalar)-1.5, (qaws_scalar)7.0, (qaws_scalar)4.0,
+		(qaws_scalar)600, (qaws_scalar)350))
+		return;
+
+	/* Lissajous-like: x(t) = 3t, y(t) = sin-like cubic approx */
+	{
+		/* P(t) = (3t, 4t(1-t)(2t-1)) for t in [0,2] */
+		/* Coefficients: c0 + c1*t + c2*t^2 + c3*t^3 */
+		/* x: 0 + 3t => c0x=0, c1x=3, c2x=0, c3x=0 */
+		/* y: 4t(1-t)(2t-1) = 4t(2t-1-2t^2+t) = 4t(3t-1-2t^2) = 12t^2-4t-8t^3 */
+		/* => c0y=0, c1y=-4, c2y=12, c3y=-8 */
+		qaws_scalar coeffs[] = {
+			0, 0,     /* c0: (0, 0) */
+			3, -4,    /* c1: (3, -4) */
+			0, 12,    /* c2: (0, 12) */
+			0, -8     /* c3: (0, -8) */
+		};
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 3;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 4;
+		desc.t_min = 0;
+		desc.t_max = 2;
+
+		if (qaws_curve_create_polynomial(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#bd93f9", (qaws_scalar)2.5);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Parabola: (t, t^2) */
+	{
+		qaws_scalar coeffs[] = { 1, 0,   2, 0,   0, 1 };
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 2;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 3;
+		desc.t_min = -1;
+		desc.t_max = 1;
+
+		if (qaws_curve_create_polynomial(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#f5a623", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	svg_label(&svg, (qaws_scalar)-0.3, (qaws_scalar)2.2,
+		"Polynomial: cubic wave + parabola", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/polynomial.svg\n");
+}
+
+static void test_svg_clothoid(void)
+{
+	printf("test_svg_clothoid\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/clothoid.svg",
+		(qaws_scalar)-1.5, (qaws_scalar)-1.0, (qaws_scalar)4.0, (qaws_scalar)3.5,
+		(qaws_scalar)600, (qaws_scalar)525))
+		return;
+
+	/* Classic Euler spiral: kappa goes from 0 to a positive value */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.origin_x = 0;
+		desc.origin_y = 0;
+		desc.start_angle = 0;
+		desc.start_curvature = 0;
+		desc.end_curvature = 3;
+		desc.length = 4;
+
+		if (qaws_curve_create_clothoid(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#e94560", (qaws_scalar)2.5);
+			svg_dot(&svg, buf[0].x, buf[0].y, "#50fa7b", (qaws_scalar)4);
+			svg_dot(&svg, buf[n-1].x, buf[n-1].y, "#f5a623", (qaws_scalar)4);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Reverse spiral: kappa from positive to 0 */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+
+		memset(&desc, 0, sizeof(desc));
+		desc.origin_x = 0;
+		desc.origin_y = 0;
+		desc.start_angle = 0;
+		desc.start_curvature = 3;
+		desc.end_curvature = 0;
+		desc.length = 4;
+
+		if (qaws_curve_create_clothoid(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#6272a4", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	svg_label(&svg, (qaws_scalar)-1.2, (qaws_scalar)2.2,
+		"Clothoid / Euler spiral", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/clothoid.svg\n");
+}
+
+static void test_svg_subdivision(void)
+{
+	printf("test_svg_subdivision\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/subdivision.svg",
+		(qaws_scalar)-1.0, (qaws_scalar)-1.0, (qaws_scalar)6.0, (qaws_scalar)5.0,
+		(qaws_scalar)600, (qaws_scalar)500))
+		return;
+
+	/* Control polygon */
+	qaws_scalar cp[] = { 0,0,  1,3,  2,1,  3.5,3.5,  5,0 };
+	qaws_vec2 cp_vis[] = { {0,0}, {1,3}, {2,1}, {(qaws_scalar)3.5,(qaws_scalar)3.5}, {5,0} };
+	svg_polyline(&svg, cp_vis, 5, "#ffffff20", (qaws_scalar)1.0);
+	svg_dots(&svg, cp_vis, 5, "#ffffff50", (qaws_scalar)3);
+
+	/* Chaikin */
+	{
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_CHAIKIN;
+		desc.control_points = cp;
+		desc.control_point_count = 5;
+		desc.closed = 0;
+		desc.refinement_levels = 6;
+
+		if (qaws_curve_create_subdivision(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#e94560", (qaws_scalar)2.5);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Lane-Riesenfeld order 3 */
+	{
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_LANE_RIESENFELD_3;
+		desc.control_points = cp;
+		desc.control_point_count = 5;
+		desc.closed = 0;
+		desc.refinement_levels = 6;
+
+		if (qaws_curve_create_subdivision(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#50fa7b", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	/* Lane-Riesenfeld order 4 */
+	{
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_LANE_RIESENFELD_4;
+		desc.control_points = cp;
+		desc.control_point_count = 5;
+		desc.closed = 0;
+		desc.refinement_levels = 6;
+
+		if (qaws_curve_create_subdivision(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#6272a4", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+
+	svg_label(&svg, (qaws_scalar)-0.5, (qaws_scalar)4.0,
+		"Subdivision: Chaikin(red) LR3(green) LR4(blue)", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/subdivision.svg\n");
+}
+
+static void test_svg_all_phase8(void)
+{
+	printf("test_svg_all_phase8\n");
+
+	svg_writer svg;
+	if (!svg_open(&svg, SVG_OUTPUT_DIR "/all_phase8.svg",
+		(qaws_scalar)-2.5, (qaws_scalar)-2.0, (qaws_scalar)10.0, (qaws_scalar)6.0,
+		(qaws_scalar)800, (qaws_scalar)480))
+		return;
+
+	/* 1. Rational Bezier quarter circle */
+	{
+		qaws_scalar cp[] = { -2, -1,   -2, 1,   0, 1 };
+		qaws_scalar w[] = { 1, (qaws_scalar)0.70710678118, 1 };
+		qaws_rational_bezier_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 2;
+		desc.control_points = cp;
+		desc.control_point_count = 3;
+		desc.weights = w;
+		desc.weight_count = 3;
+		if (qaws_curve_create_rational_bezier(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#e94560", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+	svg_label(&svg, (qaws_scalar)-2.3, (qaws_scalar)1.5, "RatBez", "#e94560");
+
+	/* 2. Circular arc (half circle) */
+	{
+		qaws_scalar pi = (qaws_scalar)3.14159265358979;
+		qaws_arc_segment seg;
+		qaws_arc_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&seg, 0, sizeof(seg));
+		seg.center[0] = 1; seg.center[1] = 0;
+		seg.radius = (qaws_scalar)1.5;
+		seg.angle_start = (qaws_scalar)0.0;
+		seg.angle_end = pi;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.segments = &seg;
+		desc.segment_count = 1;
+		if (qaws_curve_create_arc(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#50fa7b", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+	svg_label(&svg, (qaws_scalar)0.3, (qaws_scalar)2.0, "Arc", "#50fa7b");
+
+	/* 3. Clothoid */
+	{
+		qaws_clothoid_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.origin_x = 3;
+		desc.origin_y = -1;
+		desc.start_angle = (qaws_scalar)0.3;
+		desc.start_curvature = 0;
+		desc.end_curvature = 2;
+		desc.length = 3;
+		if (qaws_curve_create_clothoid(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#f5a623", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+	svg_label(&svg, (qaws_scalar)3.0, (qaws_scalar)2.5, "Clothoid", "#f5a623");
+
+	/* 4. Polynomial parabola */
+	{
+		qaws_scalar coeffs[] = { 5, -1,   1, 0,   0, 1 };
+		qaws_polynomial_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.degree = 2;
+		desc.coefficients = coeffs;
+		desc.coefficient_count = 3;
+		desc.t_min = (qaws_scalar)-1.5;
+		desc.t_max = (qaws_scalar)1.5;
+		if (qaws_curve_create_polynomial(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#bd93f9", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+	svg_label(&svg, (qaws_scalar)5.2, (qaws_scalar)1.5, "Poly", "#bd93f9");
+
+	/* 5. Subdivision Chaikin */
+	{
+		qaws_scalar cp[] = { 5.5,3,  6,1,  6.5,3,  7,0.5 };
+		qaws_subdivision_desc desc;
+		qaws_curve *crv = NULL;
+		memset(&desc, 0, sizeof(desc));
+		desc.dimension = QAWS_DIMENSION_2D;
+		desc.scheme = QAWS_SUBDIVISION_CHAIKIN;
+		desc.control_points = cp;
+		desc.control_point_count = 4;
+		desc.closed = 0;
+		desc.refinement_levels = 6;
+		if (qaws_curve_create_subdivision(&desc, &crv) == QAWS_STATUS_OK)
+		{
+			qaws_vec2 buf[SVG_SAMPLES];
+			unsigned int n = svg_sample_curve(crv, buf, SVG_SAMPLES);
+			svg_polyline(&svg, buf, n, "#ff79c6", (qaws_scalar)2.0);
+			qaws_curve_destroy(crv);
+		}
+	}
+	svg_label(&svg, (qaws_scalar)5.5, (qaws_scalar)3.5, "Subdiv", "#ff79c6");
+
+	svg_label(&svg, (qaws_scalar)-2.0, (qaws_scalar)-1.5,
+		"Phase 8: All new curve families", "#8888aa");
+	svg_close(&svg);
+	printf("  -> " SVG_OUTPUT_DIR "/all_phase8.svg\n");
+}
+
 int main(void)
 {
 	printf("=== Qaws Test Suite ===\n\n");
@@ -8983,6 +10341,14 @@ int main(void)
 	test_curve_curve_intersection();
 	test_curve_offset();
 
+	/* Phase 8 tests */
+	test_rational_bezier();
+	test_composite();
+	test_arc();
+	test_polynomial();
+	test_clothoid();
+	test_subdivision();
+
 	/* SVG visual tests */
 	printf("\n--- SVG Visual Tests ---\n");
 	svg_ensure_output_dir();
@@ -9023,6 +10389,15 @@ int main(void)
 	test_svg_offset();
 	test_svg_offset_closed();
 	test_svg_offset_selfintersect();
+
+	/* Phase 8 SVG visual tests */
+	test_svg_rational_bezier();
+	test_svg_composite();
+	test_svg_arc();
+	test_svg_polynomial();
+	test_svg_clothoid();
+	test_svg_subdivision();
+	test_svg_all_phase8();
 
 	printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
 	return g_fail > 0 ? 1 : 0;

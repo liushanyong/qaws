@@ -54,6 +54,12 @@ set(QAWS_SOURCES
   src/qaws/qaws_yuksel.c
   src/qaws/qaws_operations.c
   src/qaws/qaws_convert.c
+  src/qaws/qaws_rational_bezier.c
+  src/qaws/qaws_composite.c
+  src/qaws/qaws_arc.c
+  src/qaws/qaws_polynomial.c
+  src/qaws/qaws_clothoid.c
+  src/qaws/qaws_subdivision.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
@@ -162,6 +168,12 @@ if(QAWS_INSTALL)
       src/qaws/qaws_nurbs.h
       src/qaws/qaws_trajectory.h
       src/qaws/qaws_yuksel.h
+      src/qaws/qaws_rational_bezier.h
+      src/qaws/qaws_composite.h
+      src/qaws/qaws_arc.h
+      src/qaws/qaws_polynomial.h
+      src/qaws/qaws_clothoid.h
+      src/qaws/qaws_subdivision.h
       src/qaws/qaws_eval.h
       src/qaws/qaws_sampling.h
       src/qaws/qaws_traversal.h

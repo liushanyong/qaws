@@ -435,6 +435,13 @@ qaws_status qaws_curve_reverse(
 		return reverse_trajectory(curve, out_reversed);
 	case QAWS_CURVE_KIND_YUKSEL:
 		return reverse_yuksel(curve, out_reversed);
+	case QAWS_CURVE_KIND_RATIONAL_BEZIER:
+	case QAWS_CURVE_KIND_COMPOSITE:
+	case QAWS_CURVE_KIND_ARC:
+	case QAWS_CURVE_KIND_POLYNOMIAL:
+	case QAWS_CURVE_KIND_CLOTHOID:
+	case QAWS_CURVE_KIND_SUBDIVISION:
+		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 	default:
 		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 	}
