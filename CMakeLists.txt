@@ -54,6 +54,7 @@ set(QAWS_SOURCES
   src/qaws/qaws_yuksel.c
   src/qaws/qaws_operations.c
   src/qaws/qaws_convert.c
+  src/qaws/qaws_export.c
   src/qaws/qaws_rational_bezier.c
   src/qaws/qaws_composite.c
   src/qaws/qaws_arc.c
@@ -180,6 +181,7 @@ if(QAWS_INSTALL)
       src/qaws/qaws_inspect.h
       src/qaws/qaws_operations.h
       src/qaws/qaws_convert.h
+      src/qaws/qaws_export.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 

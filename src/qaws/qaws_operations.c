@@ -11,6 +11,8 @@
 #include "qaws_curve.h"
 #include "internal/qaws_internal_types.h"
 #include "internal/qaws_internal_basis.h"
+#include "internal/qaws_internal_curve.h"
+#include "internal/qaws_internal_arc_length.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -117,6 +119,7 @@ qaws_status qaws_curve_split(
 	case QAWS_CURVE_KIND_POLYNOMIAL:
 	case QAWS_CURVE_KIND_CLOTHOID:
 	case QAWS_CURVE_KIND_SUBDIVISION:
+	case QAWS_CURVE_KIND_REPARAMETERIZED:
 		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 
 	default:
@@ -172,6 +175,7 @@ qaws_status qaws_curve_join(
 	case QAWS_CURVE_KIND_POLYNOMIAL:
 	case QAWS_CURVE_KIND_CLOTHOID:
 	case QAWS_CURVE_KIND_SUBDIVISION:
+	case QAWS_CURVE_KIND_REPARAMETERIZED:
 		return QAWS_STATUS_UNSUPPORTED_OPERATION;
 
 	default:
@@ -2625,4 +2629,388 @@ qaws_status qaws_curve_offset_2d(
 
 	*out_count = curve_count < curve_capacity ? curve_count : curve_capacity;
 	return curve_count > 0 ? QAWS_STATUS_OK : QAWS_STATUS_INTERNAL_ERROR;
+}
+
+/* ========================================================================== */
+/*  Arc-length reparameterization                                              */
+/* ========================================================================== */
+
+typedef struct qaws_arc_reparam_impl
+{
+	qaws_curve const* source;
+	qaws_scalar* table_params;
+	qaws_scalar* table_distances;
+	unsigned int table_size;
+	qaws_scalar total_arc_length;
+} qaws_arc_reparam_impl;
+
+/* ------------------------------------------------------------------ */
+/*  Evaluation helpers                                                  */
+/* ------------------------------------------------------------------ */
+
+static qaws_status reparam_eval_span_2d(
+	qaws_curve const* curve, unsigned int span_index, qaws_scalar local_t,
+	unsigned int eval_flags, qaws_eval_result_2d* out_result)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	qaws_scalar s, src_t;
+	qaws_eval_result_2d src;
+	qaws_scalar speed, speed2, speed4;
+	qaws_scalar L;
+	unsigned int src_flags;
+	qaws_status status;
+
+	(void)span_index;
+
+	L = impl->total_arc_length;
+	s = local_t * L;
+	src_t = qaws_internal_distance_to_parameter(
+		impl->table_params, impl->table_distances,
+		impl->table_size, s);
+
+	/* We always need at least D1 from the source to compute speed for
+	   the chain rule.  If D2 is requested we also need source D2. */
+	src_flags = eval_flags | QAWS_EVAL_FLAG_POSITION;
+	if (eval_flags & (QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3))
+		src_flags |= QAWS_EVAL_FLAG_D1;
+	if (eval_flags & (QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3))
+		src_flags |= QAWS_EVAL_FLAG_D2;
+	if (eval_flags & QAWS_EVAL_FLAG_D3)
+		src_flags |= QAWS_EVAL_FLAG_D3;
+
+	status = qaws_curve_evaluate_2d(impl->source, src_t, src_flags, &src);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	memset(out_result, 0, sizeof(*out_result));
+	out_result->valid_flags = 0;
+
+	/* Position: pass through */
+	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
+		out_result->position = src.position;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
+	}
+
+	/* Compute speed = |D1| from source */
+	speed = (qaws_scalar)sqrt((double)(
+		src.d1.x * src.d1.x + src.d1.y * src.d1.y));
+	if (speed < (qaws_scalar)1e-15)
+		speed = (qaws_scalar)1e-15;
+
+	/* D1: dC/d(local_t) = D1_src * L / speed */
+	if (eval_flags & QAWS_EVAL_FLAG_D1) {
+		qaws_scalar scale = L / speed;
+		out_result->d1.x = src.d1.x * scale;
+		out_result->d1.y = src.d1.y * scale;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
+	}
+
+	/* D2: d2C/d(local_t)^2 = d2C/ds^2 * L^2
+	   where d2C/ds^2 = (D2 * speed^2 - D1 * dot(D1,D2)) / speed^4 */
+	if (eval_flags & QAWS_EVAL_FLAG_D2) {
+		qaws_scalar d1_dot_d2 = src.d1.x * src.d2.x + src.d1.y * src.d2.y;
+		speed2 = speed * speed;
+		speed4 = speed2 * speed2;
+		qaws_scalar L2 = L * L;
+		out_result->d2.x = (src.d2.x * speed2 - src.d1.x * d1_dot_d2) / speed4 * L2;
+		out_result->d2.y = (src.d2.y * speed2 - src.d1.y * d1_dot_d2) / speed4 * L2;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
+	}
+
+	/* D3: pass through with scaling d3C/ds^3 * L^3
+	   Full formula is complex; use a simplified chain rule approximation.
+	   For many practical uses (rendering, sampling), D3 is rarely needed.
+	   We compute it exactly when source D3 is available:
+	   d3C/ds^3 = (1/speed^3) * [D3/speed^3 - 3*(D1.D2)*D2/speed^5
+	              - (|D2|^2 + D1.D3)*D1/speed^5 + 5*(D1.D2)^2*D1/speed^7]
+	   Then multiply by L^3. */
+	if (eval_flags & QAWS_EVAL_FLAG_D3) {
+		qaws_scalar d1_dot_d2 = src.d1.x * src.d2.x + src.d1.y * src.d2.y;
+		qaws_scalar d1_dot_d3 = src.d1.x * src.d3.x + src.d1.y * src.d3.y;
+		qaws_scalar d2_sq = src.d2.x * src.d2.x + src.d2.y * src.d2.y;
+		speed2 = speed * speed;
+		qaws_scalar speed3 = speed2 * speed;
+		speed4 = speed2 * speed2;
+		qaws_scalar speed5 = speed4 * speed;
+		qaws_scalar speed7 = speed5 * speed2;
+		qaws_scalar L3 = L * L * L;
+
+		/* d3C/ds^3 components */
+		qaws_scalar c3x = src.d3.x / speed3
+			- (qaws_scalar)3 * d1_dot_d2 * src.d2.x / speed5
+			- (d2_sq + d1_dot_d3) * src.d1.x / speed5
+			+ (qaws_scalar)5 * d1_dot_d2 * d1_dot_d2 * src.d1.x / speed7;
+		qaws_scalar c3y = src.d3.y / speed3
+			- (qaws_scalar)3 * d1_dot_d2 * src.d2.y / speed5
+			- (d2_sq + d1_dot_d3) * src.d1.y / speed5
+			+ (qaws_scalar)5 * d1_dot_d2 * d1_dot_d2 * src.d1.y / speed7;
+
+		out_result->d3.x = c3x * L3;
+		out_result->d3.y = c3y * L3;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+static qaws_status reparam_eval_span_3d(
+	qaws_curve const* curve, unsigned int span_index, qaws_scalar local_t,
+	unsigned int eval_flags, qaws_eval_result_3d* out_result)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	qaws_scalar s, src_t;
+	qaws_eval_result_3d src;
+	qaws_scalar speed, speed2, speed4;
+	qaws_scalar L;
+	unsigned int src_flags;
+	qaws_status status;
+
+	(void)span_index;
+
+	L = impl->total_arc_length;
+	s = local_t * L;
+	src_t = qaws_internal_distance_to_parameter(
+		impl->table_params, impl->table_distances,
+		impl->table_size, s);
+
+	src_flags = eval_flags | QAWS_EVAL_FLAG_POSITION;
+	if (eval_flags & (QAWS_EVAL_FLAG_D1 | QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3))
+		src_flags |= QAWS_EVAL_FLAG_D1;
+	if (eval_flags & (QAWS_EVAL_FLAG_D2 | QAWS_EVAL_FLAG_D3))
+		src_flags |= QAWS_EVAL_FLAG_D2;
+	if (eval_flags & QAWS_EVAL_FLAG_D3)
+		src_flags |= QAWS_EVAL_FLAG_D3;
+
+	status = qaws_curve_evaluate_3d(impl->source, src_t, src_flags, &src);
+	if (status != QAWS_STATUS_OK)
+		return status;
+
+	memset(out_result, 0, sizeof(*out_result));
+	out_result->valid_flags = 0;
+
+	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
+		out_result->position = src.position;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
+	}
+
+	speed = (qaws_scalar)sqrt((double)(
+		src.d1.x * src.d1.x + src.d1.y * src.d1.y + src.d1.z * src.d1.z));
+	if (speed < (qaws_scalar)1e-15)
+		speed = (qaws_scalar)1e-15;
+
+	if (eval_flags & QAWS_EVAL_FLAG_D1) {
+		qaws_scalar scale = L / speed;
+		out_result->d1.x = src.d1.x * scale;
+		out_result->d1.y = src.d1.y * scale;
+		out_result->d1.z = src.d1.z * scale;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
+	}
+
+	if (eval_flags & QAWS_EVAL_FLAG_D2) {
+		qaws_scalar d1_dot_d2 = src.d1.x * src.d2.x + src.d1.y * src.d2.y
+			+ src.d1.z * src.d2.z;
+		speed2 = speed * speed;
+		speed4 = speed2 * speed2;
+		qaws_scalar L2 = L * L;
+		out_result->d2.x = (src.d2.x * speed2 - src.d1.x * d1_dot_d2) / speed4 * L2;
+		out_result->d2.y = (src.d2.y * speed2 - src.d1.y * d1_dot_d2) / speed4 * L2;
+		out_result->d2.z = (src.d2.z * speed2 - src.d1.z * d1_dot_d2) / speed4 * L2;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
+	}
+
+	if (eval_flags & QAWS_EVAL_FLAG_D3) {
+		qaws_scalar d1_dot_d2 = src.d1.x * src.d2.x + src.d1.y * src.d2.y
+			+ src.d1.z * src.d2.z;
+		qaws_scalar d1_dot_d3 = src.d1.x * src.d3.x + src.d1.y * src.d3.y
+			+ src.d1.z * src.d3.z;
+		qaws_scalar d2_sq = src.d2.x * src.d2.x + src.d2.y * src.d2.y
+			+ src.d2.z * src.d2.z;
+		speed2 = speed * speed;
+		qaws_scalar speed3 = speed2 * speed;
+		speed4 = speed2 * speed2;
+		qaws_scalar speed5 = speed4 * speed;
+		qaws_scalar speed7 = speed5 * speed2;
+		qaws_scalar L3 = L * L * L;
+
+		qaws_scalar c3x = src.d3.x / speed3
+			- (qaws_scalar)3 * d1_dot_d2 * src.d2.x / speed5
+			- (d2_sq + d1_dot_d3) * src.d1.x / speed5
+			+ (qaws_scalar)5 * d1_dot_d2 * d1_dot_d2 * src.d1.x / speed7;
+		qaws_scalar c3y = src.d3.y / speed3
+			- (qaws_scalar)3 * d1_dot_d2 * src.d2.y / speed5
+			- (d2_sq + d1_dot_d3) * src.d1.y / speed5
+			+ (qaws_scalar)5 * d1_dot_d2 * d1_dot_d2 * src.d1.y / speed7;
+		qaws_scalar c3z = src.d3.z / speed3
+			- (qaws_scalar)3 * d1_dot_d2 * src.d2.z / speed5
+			- (d2_sq + d1_dot_d3) * src.d1.z / speed5
+			+ (qaws_scalar)5 * d1_dot_d2 * d1_dot_d2 * src.d1.z / speed7;
+
+		out_result->d3.x = c3x * L3;
+		out_result->d3.y = c3y * L3;
+		out_result->d3.z = c3z * L3;
+		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
+	}
+
+	return QAWS_STATUS_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Destroy                                                            */
+/* ------------------------------------------------------------------ */
+
+static void reparam_destroy_impl(void* impl_ptr)
+{
+	qaws_arc_reparam_impl* impl = (qaws_arc_reparam_impl*)impl_ptr;
+	if (!impl) return;
+	free(impl->table_params);
+	free(impl->table_distances);
+	free(impl);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Property queries                                                   */
+/* ------------------------------------------------------------------ */
+
+static int reparam_is_closed(qaws_curve const* curve)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	if (impl->source->vtable && impl->source->vtable->is_closed)
+		return impl->source->vtable->is_closed(impl->source);
+	return 0;
+}
+
+static int reparam_is_periodic(qaws_curve const* curve)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	if (impl->source->vtable && impl->source->vtable->is_periodic)
+		return impl->source->vtable->is_periodic(impl->source);
+	return 0;
+}
+
+static int reparam_is_rational(qaws_curve const* curve)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	if (impl->source->vtable && impl->source->vtable->is_rational)
+		return impl->source->vtable->is_rational(impl->source);
+	return 0;
+}
+
+static qaws_continuity reparam_get_continuity(qaws_curve const* curve)
+{
+	qaws_arc_reparam_impl const* impl =
+		(qaws_arc_reparam_impl const*)curve->impl;
+	if (impl->source->vtable && impl->source->vtable->get_continuity)
+		return impl->source->vtable->get_continuity(impl->source);
+	return QAWS_CONTINUITY_NONE;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Vtable                                                             */
+/* ------------------------------------------------------------------ */
+
+static qaws_curve_vtable const reparam_vtable = {
+	reparam_eval_span_2d,
+	reparam_eval_span_3d,
+	reparam_destroy_impl,
+	reparam_is_closed,
+	reparam_is_periodic,
+	reparam_is_rational,
+	reparam_get_continuity
+};
+
+/* ------------------------------------------------------------------ */
+/*  Public API                                                         */
+/* ------------------------------------------------------------------ */
+
+qaws_status qaws_curve_reparameterize_arc_length(
+	qaws_curve const* curve,
+	unsigned int table_resolution,
+	qaws_curve** out_curve)
+{
+	qaws_arc_reparam_impl* impl = NULL;
+	qaws_curve* result = NULL;
+	qaws_range range;
+	qaws_status status;
+	unsigned int tbl_size;
+
+	if (!curve || !out_curve)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+
+	*out_curve = NULL;
+
+	tbl_size = table_resolution > 0 ? table_resolution : 256;
+
+	/* Allocate impl */
+	impl = (qaws_arc_reparam_impl*)malloc(sizeof(qaws_arc_reparam_impl));
+	if (!impl)
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+
+	memset(impl, 0, sizeof(*impl));
+	impl->source = curve;
+	impl->table_size = tbl_size;
+
+	impl->table_params = (qaws_scalar*)malloc(
+		sizeof(qaws_scalar) * (size_t)tbl_size);
+	if (!impl->table_params) {
+		free(impl);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	impl->table_distances = (qaws_scalar*)malloc(
+		sizeof(qaws_scalar) * (size_t)tbl_size);
+	if (!impl->table_distances) {
+		free(impl->table_params);
+		free(impl);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	/* Build arc-length table from the source curve */
+	status = qaws_internal_build_arc_length_table(
+		curve, tbl_size, impl->table_params, impl->table_distances);
+	if (status != QAWS_STATUS_OK) {
+		free(impl->table_distances);
+		free(impl->table_params);
+		free(impl);
+		return status;
+	}
+
+	impl->total_arc_length = impl->table_distances[tbl_size - 1];
+
+	/* Degenerate curve check */
+	if (impl->total_arc_length <= (qaws_scalar)0) {
+		free(impl->table_distances);
+		free(impl->table_params);
+		free(impl);
+		return QAWS_STATUS_DEGENERATE_CURVE;
+	}
+
+	/* Allocate the wrapper curve: single span [0, total_arc_length] */
+	range.min_value = (qaws_scalar)0;
+	range.max_value = impl->total_arc_length;
+
+	result = qaws_internal_curve_alloc(
+		QAWS_CURVE_KIND_REPARAMETERIZED,
+		curve->dimension,
+		curve->degree,
+		1,    /* span_count */
+		range,
+		&reparam_vtable);
+	if (!result) {
+		free(impl->table_distances);
+		free(impl->table_params);
+		free(impl);
+		return QAWS_STATUS_ALLOCATION_FAILURE;
+	}
+
+	result->span_boundaries[0] = (qaws_scalar)0;
+	result->span_boundaries[1] = impl->total_arc_length;
+	result->impl = impl;
+
+	*out_curve = result;
+	return QAWS_STATUS_OK;
 }

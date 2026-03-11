@@ -23,5 +23,6 @@
 #include "qaws_inspect.h"
 #include "qaws_operations.h"
 #include "qaws_convert.h"
+#include "qaws_export.h"
 
 #endif /* QAWS_H */

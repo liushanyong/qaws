@@ -44,4 +44,17 @@ qaws_status qaws_curve_offset_2d(
 	unsigned int curve_capacity,
 	unsigned int* out_count);
 
+/*
+ * Create an arc-length reparameterized wrapper curve.
+ * The resulting curve has parameter domain [0, total_arc_length]
+ * and maps uniformly to arc length along the source curve.
+ *
+ * The source curve must outlive the returned wrapper (non-owning reference).
+ * table_resolution controls the arc-length lookup table size (0 = default 256).
+ */
+qaws_status qaws_curve_reparameterize_arc_length(
+	qaws_curve const* curve,
+	unsigned int table_resolution,
+	qaws_curve** out_curve);
+
 #endif /* QAWS_OPERATIONS_H */

@@ -1639,7 +1639,7 @@ qaws_status qaws_curve_compute_winding_number_2d(
 
 #define ISECT_SAMPLE_COUNT   256
 #define ISECT_NEWTON_ITERS   20
-#define ISECT_DEDUP_TOLERANCE ((qaws_scalar)1.0e-6)
+#define ISECT_DEDUP_TOLERANCE ((qaws_scalar)1.0e-3)
 
 #if QAWS_SCALAR_IS_FLOAT
 #define ISECT_POS_TOLERANCE  ((qaws_scalar)1.0e-3f)
@@ -1649,7 +1649,7 @@ qaws_status qaws_curve_compute_winding_number_2d(
 #define ISECT_CONVERGE_TOL   ((qaws_scalar)1.0e-10)
 #endif
 
-/* Deduplication helper */
+/* Deduplication helper: checks both parameter proximity and position proximity */
 static int isect_2d_is_duplicate(
 	qaws_intersection_2d const *buf, unsigned int count, unsigned int capacity,
 	qaws_scalar ta, qaws_scalar tb)
@@ -1663,6 +1663,27 @@ static int isect_2d_is_duplicate(
 		if (da < 0) da = -da;
 		if (db < 0) db = -db;
 		if (da < ISECT_DEDUP_TOLERANCE && db < ISECT_DEDUP_TOLERANCE)
+			return 1;
+	}
+	return 0;
+}
+
+/* Position-based dedup for self-intersections: different parameter pairs
+   can converge to the same geometric crossing on multi-span curves. */
+static int isect_2d_is_pos_duplicate(
+	qaws_intersection_2d const *buf, unsigned int count, unsigned int capacity,
+	qaws_vec2 pos)
+{
+	unsigned int i;
+	unsigned int check = count < capacity ? count : capacity;
+	for (i = 0; i < check; ++i)
+	{
+		qaws_scalar dx = buf[i].position.x - pos.x;
+		qaws_scalar dy = buf[i].position.y - pos.y;
+		if (dx < 0) dx = -dx;
+		if (dy < 0) dy = -dy;
+		if (dx < ISECT_POS_TOLERANCE * (qaws_scalar)10.0 &&
+			dy < ISECT_POS_TOLERANCE * (qaws_scalar)10.0)
 			return 1;
 	}
 	return 0;
@@ -1928,16 +1949,20 @@ qaws_status qaws_curve_find_self_intersections_2d(
 						{
 							if (!isect_2d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
 							{
-								if (found < intersection_capacity)
+								qaws_eval_result_2d rp;
+								qaws_curve_evaluate_2d(curve, ta,
+									QAWS_EVAL_FLAG_POSITION, &rp);
+								/* Also check position-based dedup for multi-span curves */
+								if (!isect_2d_is_pos_duplicate(out_intersections, found, intersection_capacity, rp.position))
 								{
-									qaws_eval_result_2d rp;
-									qaws_curve_evaluate_2d(curve, ta,
-										QAWS_EVAL_FLAG_POSITION, &rp);
-									out_intersections[found].parameter_a = ta;
-									out_intersections[found].parameter_b = tb;
-									out_intersections[found].position = rp.position;
+									if (found < intersection_capacity)
+									{
+										out_intersections[found].parameter_a = ta;
+										out_intersections[found].parameter_b = tb;
+										out_intersections[found].position = rp.position;
+									}
+									++found;
 								}
-								++found;
 							}
 						}
 					}
@@ -2129,16 +2154,19 @@ qaws_status qaws_curve_find_intersections_2d(
 				{
 					if (!isect_2d_is_duplicate(out_intersections, found, intersection_capacity, ta, tb))
 					{
-						if (found < intersection_capacity)
+						qaws_eval_result_2d rp;
+						qaws_curve_evaluate_2d(curve_a, ta,
+							QAWS_EVAL_FLAG_POSITION, &rp);
+						if (!isect_2d_is_pos_duplicate(out_intersections, found, intersection_capacity, rp.position))
 						{
-							qaws_eval_result_2d rp;
-							qaws_curve_evaluate_2d(curve_a, ta,
-								QAWS_EVAL_FLAG_POSITION, &rp);
-							out_intersections[found].parameter_a = ta;
-							out_intersections[found].parameter_b = tb;
-							out_intersections[found].position = rp.position;
+							if (found < intersection_capacity)
+							{
+								out_intersections[found].parameter_a = ta;
+								out_intersections[found].parameter_b = tb;
+								out_intersections[found].position = rp.position;
+							}
+							++found;
 						}
-						++found;
 					}
 				}
 			}

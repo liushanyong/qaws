@@ -30,4 +30,9 @@ qaws_status qaws_curve_elevate_degree(
 	qaws_curve const* curve,
 	qaws_curve** out_elevated);
 
+/* Degree reduction (Bezier only, n -> n-1) */
+qaws_status qaws_curve_reduce_degree(
+	qaws_curve const* curve,
+	qaws_curve** out_reduced);
+
 #endif /* QAWS_CONVERT_H */
