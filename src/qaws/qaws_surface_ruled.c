@@ -2,6 +2,7 @@
 #include "qaws_eval.h"
 #include "qaws_inspect.h"
 #include "internal/qaws_internal_surface.h"
+#include "internal/qaws_internal_curve.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -135,10 +136,10 @@ static qaws_status ruled_surface_eval(
 	return QAWS_STATUS_OK;
 }
 
-static void ruled_surface_destroy(void* impl)
+static void ruled_surface_destroy(void* impl, qaws_allocator const* allocator)
 {
 	/* We don't own the curves - just free the impl struct */
-	free(impl);
+	qaws_internal_dealloc(allocator, impl);
 }
 
 static int ruled_surface_is_rational(qaws_surface const* s)

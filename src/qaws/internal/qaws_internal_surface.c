@@ -1,6 +1,29 @@
 #include "qaws_internal_surface.h"
+#include "qaws_internal_curve.h"
 #include <stdlib.h>
 #include <string.h>
+
+qaws_surface* qaws_internal_surface_alloc_ex(
+	qaws_surface_kind kind,
+	unsigned int u_degree,
+	unsigned int v_degree,
+	qaws_range u_range,
+	qaws_range v_range,
+	qaws_surface_vtable const* vtable,
+	qaws_allocator const* allocator)
+{
+	qaws_surface* s = (qaws_surface*)qaws_internal_alloc(allocator, sizeof(qaws_surface));
+	if (!s) return NULL;
+	s->kind = kind;
+	s->u_degree = u_degree;
+	s->v_degree = v_degree;
+	s->u_range = u_range;
+	s->v_range = v_range;
+	s->vtable = vtable;
+	s->impl = NULL;
+	s->allocator = allocator;
+	return s;
+}
 
 qaws_surface* qaws_internal_surface_alloc(
 	qaws_surface_kind kind,
@@ -10,16 +33,8 @@ qaws_surface* qaws_internal_surface_alloc(
 	qaws_range v_range,
 	qaws_surface_vtable const* vtable)
 {
-	qaws_surface* s = (qaws_surface*)malloc(sizeof(qaws_surface));
-	if (!s) return NULL;
-	s->kind = kind;
-	s->u_degree = u_degree;
-	s->v_degree = v_degree;
-	s->u_range = u_range;
-	s->v_range = v_range;
-	s->vtable = vtable;
-	s->impl = NULL;
-	return s;
+	return qaws_internal_surface_alloc_ex(
+		kind, u_degree, v_degree, u_range, v_range, vtable, NULL);
 }
 
 void qaws_internal_surface_free(qaws_surface* surface)
@@ -27,8 +42,8 @@ void qaws_internal_surface_free(qaws_surface* surface)
 	if (surface)
 	{
 		if (surface->vtable && surface->vtable->destroy_impl && surface->impl)
-			surface->vtable->destroy_impl(surface->impl);
-		free(surface);
+			surface->vtable->destroy_impl(surface->impl, surface->allocator);
+		qaws_internal_dealloc(surface->allocator, surface);
 	}
 }
 

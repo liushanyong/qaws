@@ -253,14 +253,14 @@ static qaws_status rbez_eval_span_3d(
  * Vtable: destroy
  * ------------------------------------------------------------------------- */
 
-static void rbez_destroy_impl(void* impl)
+static void rbez_destroy_impl(void* impl, qaws_allocator const* allocator)
 {
 	qaws_rational_bezier_impl* ri = (qaws_rational_bezier_impl*)impl;
 	if (ri) {
-		free(ri->control_points);
-		free(ri->weights);
-		free(ri->weighted_points);
-		free(ri);
+		qaws_internal_dealloc(allocator, ri->control_points);
+		qaws_internal_dealloc(allocator, ri->weights);
+		qaws_internal_dealloc(allocator, ri->weighted_points);
+		qaws_internal_dealloc(allocator, ri);
 	}
 }
 

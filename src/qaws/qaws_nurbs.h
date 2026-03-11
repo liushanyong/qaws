@@ -21,4 +21,9 @@ qaws_status qaws_curve_create_nurbs(
 	qaws_nurbs_desc const* desc,
 	qaws_curve** out_curve);
 
+qaws_status qaws_curve_create_nurbs_ex(
+	qaws_nurbs_desc const* desc,
+	qaws_allocator const* allocator,
+	qaws_curve** out_curve);
+
 #endif /* QAWS_NURBS_H */

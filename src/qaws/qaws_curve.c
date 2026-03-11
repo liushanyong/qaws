@@ -7,21 +7,24 @@
 #include "qaws_trajectory.h"
 #include "qaws_yuksel.h"
 #include "internal/qaws_internal_types.h"
+#include "internal/qaws_internal_curve.h"
 #include <stdlib.h>
 #include <string.h>
 
 void qaws_curve_destroy(qaws_curve *curve)
 {
+	qaws_allocator const* a;
 	if (curve == NULL) {
 		return;
 	}
 
+	a = curve->allocator;
 	if (curve->vtable != NULL && curve->vtable->destroy_impl != NULL) {
-		curve->vtable->destroy_impl(curve->impl);
+		curve->vtable->destroy_impl(curve->impl, a);
 	}
 
-	free(curve->span_boundaries);
-	free(curve);
+	qaws_internal_dealloc(a, curve->span_boundaries);
+	qaws_internal_dealloc(a, curve);
 }
 
 /* -------------------------------------------------------------------------- */

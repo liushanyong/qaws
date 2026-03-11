@@ -170,10 +170,10 @@ static qaws_status polynomial_eval_span_3d(
 	return QAWS_STATUS_OK;
 }
 
-static void polynomial_destroy_impl(void* impl)
+static void polynomial_destroy_impl(void* impl, qaws_allocator const* allocator)
 {
 	qaws_polynomial_impl* pi = (qaws_polynomial_impl*)impl;
-	if (pi) { free(pi->coefficients); free(pi); }
+	if (pi) { qaws_internal_dealloc(allocator, pi->coefficients); qaws_internal_dealloc(allocator, pi); }
 }
 
 static int polynomial_is_closed(qaws_curve const* c)    { (void)c; return 0; }

@@ -16,6 +16,7 @@ struct qaws_curve
 	qaws_scalar* span_boundaries;
 	qaws_curve_vtable const* vtable;
 	void* impl;
+	qaws_allocator const* allocator; /* NULL = use malloc/free */
 };
 
 struct qaws_curve_vtable
@@ -34,7 +35,7 @@ struct qaws_curve_vtable
 		unsigned int eval_flags,
 		qaws_eval_result_3d* out_result);
 
-	void (*destroy_impl)(void* impl);
+	void (*destroy_impl)(void* impl, qaws_allocator const* allocator);
 
 	int (*is_closed)(qaws_curve const* curve);
 	int (*is_periodic)(qaws_curve const* curve);

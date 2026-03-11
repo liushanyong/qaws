@@ -184,4 +184,41 @@ typedef struct qaws_traversal_desc
 typedef struct qaws_curve qaws_curve;
 typedef struct qaws_traversal qaws_traversal;
 
+/*
+ * Custom allocator. Pass to _ex creation functions to override
+ * malloc/free. If alloc returns NULL, creation fails with
+ * QAWS_STATUS_ALLOCATION_FAILURE.
+ *
+ * alloc(size, user_data) — allocate size bytes (like malloc)
+ * dealloc(ptr, user_data) — free pointer (like free)
+ */
+typedef struct qaws_allocator
+{
+	void* (*alloc)(unsigned long size, void* user_data);
+	void  (*dealloc)(void* ptr, void* user_data);
+	void* user_data;
+} qaws_allocator;
+
+/*
+ * Stack-allocated curve for single-span curves (up to degree 7, 3D).
+ * No heap allocation. Use qaws_curve_init_*_inline() creation functions.
+ *
+ * The curve pointer is retrieved via qaws_curve_inline_get_curve().
+ * Do NOT call qaws_curve_destroy() on inline curves.
+ *
+ * Maximum storage: 8 control points * 3 components = 24 scalars for CPs,
+ * plus impl struct overhead. Total fixed budget: 512 bytes.
+ */
+#define QAWS_INLINE_STORAGE_BYTES 512
+
+typedef struct qaws_curve_inline
+{
+	/* Opaque storage — do not access directly.
+	   Layout is set by the init functions. */
+	char storage[QAWS_INLINE_STORAGE_BYTES];
+} qaws_curve_inline;
+
+/* Get the usable qaws_curve pointer from an initialized inline curve. */
+qaws_curve* qaws_curve_inline_get_curve(qaws_curve_inline* ic);
+
 #endif /* QAWS_TYPES_H */

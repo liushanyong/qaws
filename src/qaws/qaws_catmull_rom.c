@@ -259,14 +259,14 @@ static qaws_status catmull_rom_eval_span_3d(
 /*  Vtable: lifecycle and query functions                                     */
 /* -------------------------------------------------------------------------- */
 
-static void catmull_rom_destroy_impl(void *impl)
+static void catmull_rom_destroy_impl(void *impl, qaws_allocator const* allocator)
 {
 	qaws_catmull_rom_impl *cr = (qaws_catmull_rom_impl *)impl;
 	if (cr) {
-		free(cr->control_points);
-		free(cr->knot_params);
-		free(cr->segment_coeffs);
-		free(cr);
+		qaws_internal_dealloc(allocator, cr->control_points);
+		qaws_internal_dealloc(allocator, cr->knot_params);
+		qaws_internal_dealloc(allocator, cr->segment_coeffs);
+		qaws_internal_dealloc(allocator, cr);
 	}
 }
 
@@ -314,8 +314,9 @@ static qaws_curve_vtable const catmull_rom_vtable = {
 /*  Creation                                                                  */
 /* -------------------------------------------------------------------------- */
 
-qaws_status qaws_curve_create_catmull_rom(
+qaws_status qaws_curve_create_catmull_rom_ex(
 	qaws_catmull_rom_desc const *desc,
+	qaws_allocator const *allocator,
 	qaws_curve **out_curve)
 {
 	qaws_catmull_rom_impl *impl = NULL;
@@ -356,30 +357,31 @@ qaws_status qaws_curve_create_catmull_rom(
 
 	/* --- Allocate implementation --------------------------------------- */
 
-	impl = (qaws_catmull_rom_impl *)calloc(1, sizeof(qaws_catmull_rom_impl));
+	impl = (qaws_catmull_rom_impl *)qaws_internal_alloc(allocator, (unsigned long)sizeof(qaws_catmull_rom_impl));
 	if (!impl)
 		return QAWS_STATUS_ALLOCATION_FAILURE;
+	memset(impl, 0, sizeof(qaws_catmull_rom_impl));
 
 	impl->control_point_count = N;
 	impl->parameterization = desc->parameterization;
 	impl->closed = desc->closed ? 1 : 0;
 
 	/* Copy control points */
-	impl->control_points = (qaws_scalar *)malloc(
-		sizeof(qaws_scalar) * (size_t)(N * dim_count));
+	impl->control_points = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)(sizeof(qaws_scalar) * (size_t)(N * dim_count)));
 	if (!impl->control_points) {
-		free(impl);
+		qaws_internal_dealloc(allocator, impl);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 	memcpy(impl->control_points, desc->control_points,
 	       sizeof(qaws_scalar) * (size_t)(N * dim_count));
 
 	/* Compute knot parameters */
-	impl->knot_params = (qaws_scalar *)malloc(
-		sizeof(qaws_scalar) * (size_t)N);
+	impl->knot_params = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)(sizeof(qaws_scalar) * (size_t)N));
 	if (!impl->knot_params) {
-		free(impl->control_points);
-		free(impl);
+		qaws_internal_dealloc(allocator, impl->control_points);
+		qaws_internal_dealloc(allocator, impl);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 
@@ -388,13 +390,17 @@ qaws_status qaws_curve_create_catmull_rom(
 	                    alpha, impl->knot_params);
 
 	/* Allocate segment coefficients */
-	impl->segment_coeffs = (qaws_scalar *)calloc(
-		(size_t)(span_count * dim_count * 4), sizeof(qaws_scalar));
-	if (!impl->segment_coeffs) {
-		free(impl->knot_params);
-		free(impl->control_points);
-		free(impl);
-		return QAWS_STATUS_ALLOCATION_FAILURE;
+	{
+		size_t coeffs_size = (size_t)(span_count * dim_count * 4) * sizeof(qaws_scalar);
+		impl->segment_coeffs = (qaws_scalar *)qaws_internal_alloc(allocator,
+			(unsigned long)coeffs_size);
+		if (!impl->segment_coeffs) {
+			qaws_internal_dealloc(allocator, impl->knot_params);
+			qaws_internal_dealloc(allocator, impl->control_points);
+			qaws_internal_dealloc(allocator, impl);
+			return QAWS_STATUS_ALLOCATION_FAILURE;
+		}
+		memset(impl->segment_coeffs, 0, coeffs_size);
 	}
 
 	/* Compute segment coefficients */
@@ -496,18 +502,19 @@ qaws_status qaws_curve_create_catmull_rom(
 	range.min_value = (qaws_scalar)0.0;
 	range.max_value = (qaws_scalar)span_count;
 
-	curve = qaws_internal_curve_alloc(
+	curve = qaws_internal_curve_alloc_ex(
 		QAWS_CURVE_KIND_CATMULL_ROM,
 		desc->dimension,
 		3,            /* degree */
 		span_count,
 		range,
-		&catmull_rom_vtable);
+		&catmull_rom_vtable,
+		allocator);
 	if (!curve) {
-		free(impl->segment_coeffs);
-		free(impl->knot_params);
-		free(impl->control_points);
-		free(impl);
+		qaws_internal_dealloc(allocator, impl->segment_coeffs);
+		qaws_internal_dealloc(allocator, impl->knot_params);
+		qaws_internal_dealloc(allocator, impl->control_points);
+		qaws_internal_dealloc(allocator, impl);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 
@@ -520,4 +527,11 @@ qaws_status qaws_curve_create_catmull_rom(
 	*out_curve = curve;
 
 	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_create_catmull_rom(
+	qaws_catmull_rom_desc const *desc,
+	qaws_curve **out_curve)
+{
+	return qaws_curve_create_catmull_rom_ex(desc, NULL, out_curve);
 }

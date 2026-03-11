@@ -55,6 +55,7 @@ set(QAWS_SOURCES
   src/qaws/qaws_operations.c
   src/qaws/qaws_convert.c
   src/qaws/qaws_export.c
+  src/qaws/qaws_import.c
   src/qaws/qaws_rational_bezier.c
   src/qaws/qaws_composite.c
   src/qaws/qaws_arc.c
@@ -67,6 +68,7 @@ set(QAWS_SOURCES
   src/qaws/qaws_surface_nurbs.c
   src/qaws/qaws_surface_swept.c
   src/qaws/qaws_surface_ruled.c
+  src/qaws/qaws_inline.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
@@ -189,6 +191,7 @@ if(QAWS_INSTALL)
       src/qaws/qaws_operations.h
       src/qaws/qaws_convert.h
       src/qaws/qaws_export.h
+      src/qaws/qaws_import.h
       src/qaws/qaws_surface.h
       src/qaws/qaws_surface_types.h
       src/qaws/qaws_surface_bezier.h
@@ -196,6 +199,8 @@ if(QAWS_INSTALL)
       src/qaws/qaws_surface_nurbs.h
       src/qaws/qaws_surface_swept.h
       src/qaws/qaws_surface_ruled.h
+      src/qaws/qaws_alloc.h
+      src/qaws/qaws_inline.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 

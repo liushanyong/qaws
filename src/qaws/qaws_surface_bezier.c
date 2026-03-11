@@ -1,6 +1,7 @@
 #include "qaws_surface_bezier.h"
 #include "internal/qaws_internal_surface.h"
 #include "internal/qaws_internal_basis.h"
+#include "internal/qaws_internal_curve.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -186,13 +187,13 @@ static qaws_status bezier_surface_eval(
 	return QAWS_STATUS_OK;
 }
 
-static void bezier_surface_destroy(void* impl)
+static void bezier_surface_destroy(void* impl, qaws_allocator const* allocator)
 {
 	qaws_surface_bezier_impl* bi = (qaws_surface_bezier_impl*)impl;
 	if (bi)
 	{
-		free(bi->control_points);
-		free(bi);
+		qaws_internal_dealloc(allocator, bi->control_points);
+		qaws_internal_dealloc(allocator, bi);
 	}
 }
 
@@ -208,8 +209,9 @@ static qaws_surface_vtable const bezier_surface_vtable = {
 	bezier_surface_is_rational
 };
 
-qaws_status qaws_surface_create_bezier(
+qaws_status qaws_surface_create_bezier_ex(
 	qaws_surface_bezier_desc const* desc,
+	qaws_allocator const* allocator,
 	qaws_surface** out_surface)
 {
 	qaws_surface* surface;
@@ -228,21 +230,22 @@ qaws_status qaws_surface_create_bezier(
 	u_range.min_value = 0; u_range.max_value = 1;
 	v_range.min_value = 0; v_range.max_value = 1;
 
-	surface = qaws_internal_surface_alloc(
+	surface = qaws_internal_surface_alloc_ex(
 		QAWS_SURFACE_KIND_BEZIER,
 		desc->u_degree, desc->v_degree,
 		u_range, v_range,
-		&bezier_surface_vtable);
+		&bezier_surface_vtable,
+		allocator);
 	if (!surface) return QAWS_STATUS_ALLOCATION_FAILURE;
 
-	impl = (qaws_surface_bezier_impl*)malloc(sizeof(qaws_surface_bezier_impl));
+	impl = (qaws_surface_bezier_impl*)qaws_internal_alloc(allocator, (unsigned long)sizeof(qaws_surface_bezier_impl));
 	if (!impl) { qaws_internal_surface_free(surface); return QAWS_STATUS_ALLOCATION_FAILURE; }
 
 	cp_size = (size_t)desc->u_point_count * desc->v_point_count * 3 * sizeof(qaws_scalar);
-	impl->control_points = (qaws_scalar*)malloc(cp_size);
+	impl->control_points = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)cp_size);
 	if (!impl->control_points)
 	{
-		free(impl);
+		qaws_internal_dealloc(allocator, impl);
 		qaws_internal_surface_free(surface);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
@@ -253,4 +256,11 @@ qaws_status qaws_surface_create_bezier(
 	surface->impl = impl;
 	*out_surface = surface;
 	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_surface_create_bezier(
+	qaws_surface_bezier_desc const* desc,
+	qaws_surface** out_surface)
+{
+	return qaws_surface_create_bezier_ex(desc, NULL, out_surface);
 }

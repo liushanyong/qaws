@@ -20,4 +20,9 @@ qaws_status qaws_curve_create_bspline(
 	qaws_bspline_desc const* desc,
 	qaws_curve** out_curve);
 
+qaws_status qaws_curve_create_bspline_ex(
+	qaws_bspline_desc const* desc,
+	qaws_allocator const* allocator,
+	qaws_curve** out_curve);
+
 #endif /* QAWS_BSPLINE_H */

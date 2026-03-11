@@ -14,6 +14,7 @@ struct qaws_surface
 	qaws_range v_range;
 	qaws_surface_vtable const* vtable;
 	void* impl;
+	qaws_allocator const* allocator; /* NULL = use malloc/free */
 };
 
 struct qaws_surface_vtable
@@ -25,7 +26,7 @@ struct qaws_surface_vtable
 		unsigned int eval_flags,
 		qaws_surface_eval_result* out_result);
 
-	void (*destroy_impl)(void* impl);
+	void (*destroy_impl)(void* impl, qaws_allocator const* allocator);
 
 	int (*is_rational)(qaws_surface const* surface);
 };
@@ -70,6 +71,15 @@ qaws_surface* qaws_internal_surface_alloc(
 	qaws_range u_range,
 	qaws_range v_range,
 	qaws_surface_vtable const* vtable);
+
+qaws_surface* qaws_internal_surface_alloc_ex(
+	qaws_surface_kind kind,
+	unsigned int u_degree,
+	unsigned int v_degree,
+	qaws_range u_range,
+	qaws_range v_range,
+	qaws_surface_vtable const* vtable,
+	qaws_allocator const* allocator);
 
 void qaws_internal_surface_free(qaws_surface* surface);
 

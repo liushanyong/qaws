@@ -124,7 +124,7 @@ static qaws_status composite_eval_span_3d(
 /*  Destroy                                                            */
 /* ------------------------------------------------------------------ */
 
-static void composite_destroy_impl(void* impl_ptr)
+static void composite_destroy_impl(void* impl_ptr, qaws_allocator const* allocator)
 {
 	qaws_composite_impl* impl = (qaws_composite_impl*)impl_ptr;
 	unsigned int i;
@@ -133,9 +133,9 @@ static void composite_destroy_impl(void* impl_ptr)
 	if (impl->segments) {
 		for (i = 0; i < impl->segment_count; i++)
 			qaws_curve_destroy(impl->segments[i]);
-		free(impl->segments);
+		qaws_internal_dealloc(allocator, impl->segments);
 	}
-	free(impl);
+	qaws_internal_dealloc(allocator, impl);
 }
 
 /* ------------------------------------------------------------------ */

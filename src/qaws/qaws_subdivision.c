@@ -423,13 +423,13 @@ static qaws_status subdivision_eval_span_3d(
 /*  Vtable: lifecycle and query functions                                     */
 /* -------------------------------------------------------------------------- */
 
-static void subdivision_destroy_impl(void* impl)
+static void subdivision_destroy_impl(void* impl, qaws_allocator const* allocator)
 {
 	qaws_subdivision_impl* si = (qaws_subdivision_impl*)impl;
 	if (si) {
-		free(si->refined_points);
-		free(si->segment_coeffs);
-		free(si);
+		qaws_internal_dealloc(allocator, si->refined_points);
+		qaws_internal_dealloc(allocator, si->segment_coeffs);
+		qaws_internal_dealloc(allocator, si);
 	}
 }
 

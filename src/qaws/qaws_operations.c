@@ -2860,13 +2860,13 @@ static qaws_status reparam_eval_span_3d(
 /*  Destroy                                                            */
 /* ------------------------------------------------------------------ */
 
-static void reparam_destroy_impl(void* impl_ptr)
+static void reparam_destroy_impl(void* impl_ptr, qaws_allocator const* allocator)
 {
 	qaws_arc_reparam_impl* impl = (qaws_arc_reparam_impl*)impl_ptr;
 	if (!impl) return;
-	free(impl->table_params);
-	free(impl->table_distances);
-	free(impl);
+	qaws_internal_dealloc(allocator, impl->table_params);
+	qaws_internal_dealloc(allocator, impl->table_distances);
+	qaws_internal_dealloc(allocator, impl);
 }
 
 /* ------------------------------------------------------------------ */

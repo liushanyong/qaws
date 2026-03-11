@@ -1,6 +1,7 @@
 #include "qaws_surface_bspline.h"
 #include "internal/qaws_internal_surface.h"
 #include "internal/qaws_internal_basis.h"
+#include "internal/qaws_internal_curve.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -165,15 +166,15 @@ static qaws_status bspline_surface_eval(
 	return QAWS_STATUS_OK;
 }
 
-static void bspline_surface_destroy(void* impl)
+static void bspline_surface_destroy(void* impl, qaws_allocator const* allocator)
 {
 	qaws_surface_bspline_impl* bi = (qaws_surface_bspline_impl*)impl;
 	if (bi)
 	{
-		free(bi->control_points);
-		free(bi->u_knots);
-		free(bi->v_knots);
-		free(bi);
+		qaws_internal_dealloc(allocator, bi->control_points);
+		qaws_internal_dealloc(allocator, bi->u_knots);
+		qaws_internal_dealloc(allocator, bi->v_knots);
+		qaws_internal_dealloc(allocator, bi);
 	}
 }
 
@@ -189,8 +190,9 @@ static qaws_surface_vtable const bspline_surface_vtable = {
 	bspline_surface_is_rational
 };
 
-qaws_status qaws_surface_create_bspline(
+qaws_status qaws_surface_create_bspline_ex(
 	qaws_surface_bspline_desc const* desc,
+	qaws_allocator const* allocator,
 	qaws_surface** out_surface)
 {
 	qaws_surface* surface;
@@ -213,7 +215,7 @@ qaws_status qaws_surface_create_bspline(
 	if (desc->u_knot_count == 0 || !desc->u_knots)
 	{
 		u_knot_count = desc->u_point_count + desc->u_degree + 1;
-		u_knots = (qaws_scalar*)malloc(sizeof(qaws_scalar) * u_knot_count);
+		u_knots = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)(sizeof(qaws_scalar) * u_knot_count));
 		if (!u_knots) return QAWS_STATUS_ALLOCATION_FAILURE;
 		qaws_internal_surface_uniform_knots(
 			desc->u_degree, desc->u_point_count, u_knots, u_knot_count);
@@ -225,7 +227,7 @@ qaws_status qaws_surface_create_bspline(
 		{
 			return QAWS_STATUS_INVALID_KNOT_VECTOR;
 		}
-		u_knots = (qaws_scalar*)malloc(sizeof(qaws_scalar) * u_knot_count);
+		u_knots = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)(sizeof(qaws_scalar) * u_knot_count));
 		if (!u_knots) return QAWS_STATUS_ALLOCATION_FAILURE;
 		memcpy(u_knots, desc->u_knots, sizeof(qaws_scalar) * u_knot_count);
 	}
@@ -234,8 +236,8 @@ qaws_status qaws_surface_create_bspline(
 	if (desc->v_knot_count == 0 || !desc->v_knots)
 	{
 		v_knot_count = desc->v_point_count + desc->v_degree + 1;
-		v_knots = (qaws_scalar*)malloc(sizeof(qaws_scalar) * v_knot_count);
-		if (!v_knots) { free(u_knots); return QAWS_STATUS_ALLOCATION_FAILURE; }
+		v_knots = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)(sizeof(qaws_scalar) * v_knot_count));
+		if (!v_knots) { qaws_internal_dealloc(allocator, u_knots); return QAWS_STATUS_ALLOCATION_FAILURE; }
 		qaws_internal_surface_uniform_knots(
 			desc->v_degree, desc->v_point_count, v_knots, v_knot_count);
 	}
@@ -244,11 +246,11 @@ qaws_status qaws_surface_create_bspline(
 		v_knot_count = desc->v_knot_count;
 		if (v_knot_count != desc->v_point_count + desc->v_degree + 1)
 		{
-			free(u_knots);
+			qaws_internal_dealloc(allocator, u_knots);
 			return QAWS_STATUS_INVALID_KNOT_VECTOR;
 		}
-		v_knots = (qaws_scalar*)malloc(sizeof(qaws_scalar) * v_knot_count);
-		if (!v_knots) { free(u_knots); return QAWS_STATUS_ALLOCATION_FAILURE; }
+		v_knots = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)(sizeof(qaws_scalar) * v_knot_count));
+		if (!v_knots) { qaws_internal_dealloc(allocator, u_knots); return QAWS_STATUS_ALLOCATION_FAILURE; }
 		memcpy(v_knots, desc->v_knots, sizeof(qaws_scalar) * v_knot_count);
 	}
 
@@ -258,30 +260,31 @@ qaws_status qaws_surface_create_bspline(
 	v_range.min_value = v_knots[desc->v_degree];
 	v_range.max_value = v_knots[desc->v_point_count];
 
-	surface = qaws_internal_surface_alloc(
+	surface = qaws_internal_surface_alloc_ex(
 		QAWS_SURFACE_KIND_BSPLINE,
 		desc->u_degree, desc->v_degree,
 		u_range, v_range,
-		&bspline_surface_vtable);
+		&bspline_surface_vtable,
+		allocator);
 	if (!surface)
 	{
-		free(u_knots); free(v_knots);
+		qaws_internal_dealloc(allocator, u_knots); qaws_internal_dealloc(allocator, v_knots);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 
-	impl = (qaws_surface_bspline_impl*)malloc(sizeof(qaws_surface_bspline_impl));
+	impl = (qaws_surface_bspline_impl*)qaws_internal_alloc(allocator, (unsigned long)sizeof(qaws_surface_bspline_impl));
 	if (!impl)
 	{
-		free(u_knots); free(v_knots);
+		qaws_internal_dealloc(allocator, u_knots); qaws_internal_dealloc(allocator, v_knots);
 		qaws_internal_surface_free(surface);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 
 	cp_size = (size_t)desc->u_point_count * desc->v_point_count * 3 * sizeof(qaws_scalar);
-	impl->control_points = (qaws_scalar*)malloc(cp_size);
+	impl->control_points = (qaws_scalar*)qaws_internal_alloc(allocator, (unsigned long)cp_size);
 	if (!impl->control_points)
 	{
-		free(u_knots); free(v_knots); free(impl);
+		qaws_internal_dealloc(allocator, u_knots); qaws_internal_dealloc(allocator, v_knots); qaws_internal_dealloc(allocator, impl);
 		qaws_internal_surface_free(surface);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
@@ -308,4 +311,11 @@ qaws_status qaws_surface_create_bspline(
 	surface->impl = impl;
 	*out_surface = surface;
 	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_surface_create_bspline(
+	qaws_surface_bspline_desc const* desc,
+	qaws_surface** out_surface)
+{
+	return qaws_surface_create_bspline_ex(desc, NULL, out_surface);
 }

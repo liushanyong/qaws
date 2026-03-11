@@ -16,11 +16,13 @@ static int nurbs_compute_span_boundaries(
 	unsigned int knot_count,
 	unsigned int degree,
 	unsigned int control_point_count,
+	qaws_allocator const *allocator,
 	qaws_scalar **out_boundaries,
 	unsigned int *out_span_count)
 {
 	unsigned int max_spans = knot_count;
-	qaws_scalar *tmp = (qaws_scalar *)malloc((size_t)max_spans * sizeof(qaws_scalar));
+	qaws_scalar *tmp = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)((size_t)max_spans * sizeof(qaws_scalar)));
 	unsigned int count = 0;
 	qaws_scalar prev;
 	unsigned int i;
@@ -292,15 +294,15 @@ static qaws_status nurbs_eval_span_3d(
  * Vtable: destroy
  * ------------------------------------------------------------------------- */
 
-static void nurbs_destroy_impl(void *impl)
+static void nurbs_destroy_impl(void *impl, qaws_allocator const* allocator)
 {
 	qaws_nurbs_impl *ni = (qaws_nurbs_impl *)impl;
 	if (ni)
 	{
-		free(ni->control_points);
-		free(ni->knots);
-		free(ni->weights);
-		free(ni);
+		qaws_internal_dealloc(allocator, ni->control_points);
+		qaws_internal_dealloc(allocator, ni->knots);
+		qaws_internal_dealloc(allocator, ni->weights);
+		qaws_internal_dealloc(allocator, ni);
 	}
 }
 
@@ -355,8 +357,9 @@ static qaws_curve_vtable const nurbs_vtable = {
  * Creation
  * ------------------------------------------------------------------------- */
 
-qaws_status qaws_curve_create_nurbs(
+qaws_status qaws_curve_create_nurbs_ex(
 	qaws_nurbs_desc const *desc,
+	qaws_allocator const *allocator,
 	qaws_curve **out_curve)
 {
 	unsigned int dim_count;
@@ -422,12 +425,12 @@ qaws_status qaws_curve_create_nurbs(
 
 	/* Compute span boundaries */
 	if (nurbs_compute_span_boundaries(desc->knots, knot_count, degree,
-		control_point_count, &span_boundaries, &span_count) != 0)
+		control_point_count, allocator, &span_boundaries, &span_count) != 0)
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 
 	if (span_count < 1)
 	{
-		free(span_boundaries);
+		qaws_internal_dealloc(allocator, span_boundaries);
 		return QAWS_STATUS_INVALID_KNOT_VECTOR;
 	}
 
@@ -436,38 +439,42 @@ qaws_status qaws_curve_create_nurbs(
 	parameter_range.max_value = desc->knots[control_point_count];
 
 	/* Allocate curve */
-	curve = qaws_internal_curve_alloc(
+	curve = qaws_internal_curve_alloc_ex(
 		QAWS_CURVE_KIND_NURBS,
 		desc->dimension,
 		degree,
 		span_count,
 		parameter_range,
-		&nurbs_vtable);
+		&nurbs_vtable,
+		allocator);
 
 	if (!curve)
 	{
-		free(span_boundaries);
+		qaws_internal_dealloc(allocator, span_boundaries);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
 
 	/* Copy span boundaries into the curve */
 	memcpy(curve->span_boundaries, span_boundaries, (size_t)(span_count + 1) * sizeof(qaws_scalar));
-	free(span_boundaries);
+	qaws_internal_dealloc(allocator, span_boundaries);
 
 	/* Allocate impl */
-	impl = (qaws_nurbs_impl *)calloc(1, sizeof(qaws_nurbs_impl));
+	impl = (qaws_nurbs_impl *)qaws_internal_alloc(allocator,
+		(unsigned long)sizeof(qaws_nurbs_impl));
 	if (!impl)
 	{
 		qaws_curve_destroy(curve);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
+	memset(impl, 0, sizeof(qaws_nurbs_impl));
 
 	/* Copy control points */
 	cp_size = (size_t)control_point_count * (size_t)dim_count * sizeof(qaws_scalar);
-	impl->control_points = (qaws_scalar *)malloc(cp_size);
+	impl->control_points = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)cp_size);
 	if (!impl->control_points)
 	{
-		free(impl);
+		qaws_internal_dealloc(allocator, impl);
 		qaws_curve_destroy(curve);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
@@ -476,11 +483,12 @@ qaws_status qaws_curve_create_nurbs(
 
 	/* Copy knots */
 	knot_size = (size_t)knot_count * sizeof(qaws_scalar);
-	impl->knots = (qaws_scalar *)malloc(knot_size);
+	impl->knots = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)knot_size);
 	if (!impl->knots)
 	{
-		free(impl->control_points);
-		free(impl);
+		qaws_internal_dealloc(allocator, impl->control_points);
+		qaws_internal_dealloc(allocator, impl);
 		qaws_curve_destroy(curve);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
@@ -489,12 +497,13 @@ qaws_status qaws_curve_create_nurbs(
 
 	/* Copy weights */
 	weight_size = (size_t)control_point_count * sizeof(qaws_scalar);
-	impl->weights = (qaws_scalar *)malloc(weight_size);
+	impl->weights = (qaws_scalar *)qaws_internal_alloc(allocator,
+		(unsigned long)weight_size);
 	if (!impl->weights)
 	{
-		free(impl->knots);
-		free(impl->control_points);
-		free(impl);
+		qaws_internal_dealloc(allocator, impl->knots);
+		qaws_internal_dealloc(allocator, impl->control_points);
+		qaws_internal_dealloc(allocator, impl);
 		qaws_curve_destroy(curve);
 		return QAWS_STATUS_ALLOCATION_FAILURE;
 	}
@@ -505,4 +514,11 @@ qaws_status qaws_curve_create_nurbs(
 	*out_curve = curve;
 
 	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_create_nurbs(
+	qaws_nurbs_desc const *desc,
+	qaws_curve **out_curve)
+{
+	return qaws_curve_create_nurbs_ex(desc, NULL, out_curve);
 }

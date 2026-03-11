@@ -1,9 +1,19 @@
 #include "qaws_export.h"
+#include "qaws_bezier.h"
 #include "qaws_bspline.h"
+#include "qaws_curve.h"
+#include "qaws_convert.h"
+#include "qaws_eval.h"
+#include "qaws_inspect.h"
+#include "qaws_rational_bezier.h"
+#include "qaws_sampling.h"
+#include "internal/qaws_internal_types.h"
 #include "internal/qaws_internal_basis.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -328,4 +338,420 @@ cleanup:
 	free(basis);
 	free(ctrl);
 	return status;
+}
+
+/* ========================================================================== */
+/*  SVG path export                                                            */
+/* ========================================================================== */
+
+/* Safe snprintf into a bounded buffer, advancing the write position. */
+typedef struct svg_buf
+{
+	char* data;
+	unsigned int capacity;
+	unsigned int pos;
+} svg_buf;
+
+static void svgbuf_append(svg_buf* b, char const* fmt, ...)
+{
+	va_list ap;
+	int n;
+	unsigned int avail;
+	if (b->pos + 1 >= b->capacity) return; /* need at least 1 byte + null */
+	avail = b->capacity - b->pos;
+	va_start(ap, fmt);
+	n = vsnprintf(b->data + b->pos, (size_t)avail, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+	{
+		/* MSVC: truncation returns -1. Mark buffer as full. */
+		b->pos = b->capacity;
+	}
+	else if ((unsigned int)n >= avail)
+	{
+		/* C99: returns would-be length. Buffer was truncated. */
+		b->pos = b->capacity;
+	}
+	else
+	{
+		b->pos += (unsigned int)n;
+	}
+}
+
+/* Write M (move-to) command */
+static void svg_emit_move(svg_buf* b, qaws_scalar x, qaws_scalar y)
+{
+	svgbuf_append(b, "M%.6g %.6g", (double)x, (double)y);
+}
+
+/* Write C (cubic bezier) command */
+static void svg_emit_cubic(svg_buf* b,
+	qaws_scalar x1, qaws_scalar y1,
+	qaws_scalar x2, qaws_scalar y2,
+	qaws_scalar x3, qaws_scalar y3)
+{
+	svgbuf_append(b, " C%.6g %.6g %.6g %.6g %.6g %.6g",
+		(double)x1, (double)y1, (double)x2, (double)y2, (double)x3, (double)y3);
+}
+
+/* Write Q (quadratic bezier) command */
+static void svg_emit_quadratic(svg_buf* b,
+	qaws_scalar x1, qaws_scalar y1,
+	qaws_scalar x2, qaws_scalar y2)
+{
+	svgbuf_append(b, " Q%.6g %.6g %.6g %.6g",
+		(double)x1, (double)y1, (double)x2, (double)y2);
+}
+
+/* Write L (line-to) command */
+static void svg_emit_line(svg_buf* b, qaws_scalar x, qaws_scalar y)
+{
+	svgbuf_append(b, " L%.6g %.6g", (double)x, (double)y);
+}
+
+/* ---- Export strategies per family ---- */
+
+/* Bezier: direct mapping. Degree 1=L, 2=Q, 3=C, higher=approx */
+static qaws_status svg_export_bezier(qaws_curve const* curve, svg_buf* b)
+{
+	unsigned int deg = qaws_curve_get_degree(curve);
+	qaws_vec2 cp[64];
+	unsigned int n = 0;
+	qaws_status s;
+
+	s = qaws_bezier_get_control_points(curve, cp, 64, &n);
+	if (s != QAWS_STATUS_OK) return s;
+
+	svg_emit_move(b, cp[0].x, cp[0].y);
+
+	if (deg == 1)
+	{
+		svg_emit_line(b, cp[1].x, cp[1].y);
+	}
+	else if (deg == 2)
+	{
+		svg_emit_quadratic(b, cp[1].x, cp[1].y, cp[2].x, cp[2].y);
+	}
+	else if (deg == 3)
+	{
+		svg_emit_cubic(b, cp[1].x, cp[1].y, cp[2].x, cp[2].y, cp[3].x, cp[3].y);
+	}
+	else
+	{
+		/* Higher degree: sample and fit cubic segments */
+		unsigned int npts = 4 * deg;
+		unsigned int i;
+		qaws_eval_result_2d r;
+		qaws_vec2 prev;
+		prev = cp[0];
+		for (i = 1; i <= npts; i++)
+		{
+			qaws_scalar t = (qaws_scalar)i / (qaws_scalar)npts;
+			qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+			svg_emit_line(b, r.position.x, r.position.y);
+		}
+	}
+	return QAWS_STATUS_OK;
+}
+
+/* Hermite: convert each span to cubic Bezier */
+static qaws_status svg_export_hermite(qaws_curve const* curve, svg_buf* b)
+{
+	unsigned int span_count = qaws_curve_get_span_count(curve);
+	unsigned int span;
+	int first = 1;
+
+	for (span = 0; span < span_count; span++)
+	{
+		qaws_curve* bez = NULL;
+		qaws_vec2 cp[4];
+		unsigned int n = 0;
+		qaws_status s;
+
+		s = qaws_curve_convert_hermite_to_bezier(curve, span, &bez);
+		if (s != QAWS_STATUS_OK) return s;
+
+		qaws_bezier_get_control_points(bez, cp, 4, &n);
+
+		if (first)
+		{
+			svg_emit_move(b, cp[0].x, cp[0].y);
+			first = 0;
+		}
+		svg_emit_cubic(b, cp[1].x, cp[1].y, cp[2].x, cp[2].y, cp[3].x, cp[3].y);
+		qaws_curve_destroy(bez);
+	}
+	return QAWS_STATUS_OK;
+}
+
+/* Catmull-Rom: convert each span to cubic Bezier */
+static qaws_status svg_export_catmull_rom(qaws_curve const* curve, svg_buf* b)
+{
+	unsigned int span_count = qaws_curve_get_span_count(curve);
+	unsigned int span;
+	int first = 1;
+
+	for (span = 0; span < span_count; span++)
+	{
+		qaws_curve* bez = NULL;
+		qaws_vec2 cp[4];
+		unsigned int n = 0;
+		qaws_status s;
+
+		s = qaws_curve_convert_catmull_rom_to_bezier(curve, span, &bez);
+		if (s != QAWS_STATUS_OK) return s;
+
+		qaws_bezier_get_control_points(bez, cp, 4, &n);
+
+		if (first)
+		{
+			svg_emit_move(b, cp[0].x, cp[0].y);
+			first = 0;
+		}
+		svg_emit_cubic(b, cp[1].x, cp[1].y, cp[2].x, cp[2].y, cp[3].x, cp[3].y);
+		qaws_curve_destroy(bez);
+	}
+	return QAWS_STATUS_OK;
+}
+
+/* Rational Bezier: quadratic = exact Q command, otherwise approximate */
+static qaws_status svg_export_rational_bezier(qaws_curve const* curve, svg_buf* b,
+	unsigned int sample_count)
+{
+	unsigned int deg = qaws_curve_get_degree(curve);
+
+	if (deg == 2)
+	{
+		/* Rational quadratic maps to SVG Q only if w1=1 (non-rational case).
+		   For general rational, we must approximate. */
+	}
+
+	/* Approximate via sampling */
+	{
+		qaws_range range = qaws_curve_get_parameter_range(curve);
+		qaws_scalar len = range.max_value - range.min_value;
+		unsigned int i;
+		qaws_eval_result_2d r;
+
+		qaws_curve_evaluate_2d(curve, range.min_value, QAWS_EVAL_FLAG_POSITION, &r);
+		svg_emit_move(b, r.position.x, r.position.y);
+
+		for (i = 1; i <= sample_count; i++)
+		{
+			qaws_scalar t = range.min_value + len * (qaws_scalar)i / (qaws_scalar)sample_count;
+			qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+			svg_emit_line(b, r.position.x, r.position.y);
+		}
+	}
+	return QAWS_STATUS_OK;
+}
+
+/*
+ * Generic fallback: sample curve, then fit piecewise cubic Bezier segments.
+ * Uses cubic Hermite interpolation: at each segment boundary, evaluate
+ * position and tangent, then derive Bezier CPs from the Hermite form.
+ */
+static qaws_status svg_export_sampled(qaws_curve const* curve, svg_buf* b,
+	unsigned int sample_count)
+{
+	qaws_range range = qaws_curve_get_parameter_range(curve);
+	qaws_scalar len = range.max_value - range.min_value;
+	unsigned int seg_count;
+	unsigned int i;
+	qaws_eval_result_2d prev, curr;
+	qaws_status s;
+
+	if (sample_count < 4) sample_count = 4;
+	/* We'll create segments: every 3 sample intervals = 1 cubic segment.
+	   Actually, the simplest high-quality approach: evaluate position+tangent
+	   at evenly spaced points, then each pair of consecutive points defines
+	   a cubic Hermite segment that we convert to Bezier. */
+	seg_count = sample_count;
+
+	s = qaws_curve_evaluate_2d(curve, range.min_value,
+		QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &prev);
+	if (s != QAWS_STATUS_OK) return s;
+
+	svg_emit_move(b, prev.position.x, prev.position.y);
+
+	for (i = 1; i <= seg_count; i++)
+	{
+		qaws_scalar t = range.min_value + len * (qaws_scalar)i / (qaws_scalar)seg_count;
+		qaws_scalar dt = len / (qaws_scalar)seg_count;
+		qaws_vec2 b1, b2;
+
+		s = qaws_curve_evaluate_2d(curve, t,
+			QAWS_EVAL_FLAG_POSITION | QAWS_EVAL_FLAG_D1, &curr);
+		if (s != QAWS_STATUS_OK) return s;
+
+		/* Hermite-to-Bezier: B1 = P0 + M0/(3), B2 = P1 - M1/(3)
+		   where M0 = tangent * dt (scale to segment interval) */
+		b1.x = prev.position.x + prev.d1.x * dt / (qaws_scalar)3;
+		b1.y = prev.position.y + prev.d1.y * dt / (qaws_scalar)3;
+		b2.x = curr.position.x - curr.d1.x * dt / (qaws_scalar)3;
+		b2.y = curr.position.y - curr.d1.y * dt / (qaws_scalar)3;
+
+		svg_emit_cubic(b, b1.x, b1.y, b2.x, b2.y,
+			curr.position.x, curr.position.y);
+
+		prev = curr;
+	}
+	return QAWS_STATUS_OK;
+}
+
+qaws_status qaws_curve_export_svg_path(
+	qaws_curve const* curve,
+	char* out_path_data,
+	unsigned int capacity,
+	unsigned int* out_length,
+	unsigned int sample_count)
+{
+	svg_buf b;
+	qaws_curve_kind kind;
+	qaws_status s;
+
+	if (!curve || !out_path_data || !out_length)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+	if (qaws_curve_get_dimension(curve) != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+	if (capacity == 0)
+		return QAWS_STATUS_BUFFER_TOO_SMALL;
+	if (sample_count == 0)
+		sample_count = 64;
+
+	b.data = out_path_data;
+	b.capacity = capacity;
+	b.pos = 0;
+	b.data[0] = '\0';
+
+	kind = qaws_curve_get_kind(curve);
+
+	switch (kind)
+	{
+	case QAWS_CURVE_KIND_BEZIER:
+		s = svg_export_bezier(curve, &b);
+		break;
+	case QAWS_CURVE_KIND_HERMITE:
+		s = svg_export_hermite(curve, &b);
+		break;
+	case QAWS_CURVE_KIND_CATMULL_ROM:
+		s = svg_export_catmull_rom(curve, &b);
+		break;
+	case QAWS_CURVE_KIND_RATIONAL_BEZIER:
+		s = svg_export_rational_bezier(curve, &b, sample_count);
+		break;
+	default:
+		/* All other families: sample + Hermite-to-Bezier fit */
+		s = svg_export_sampled(curve, &b, sample_count);
+		break;
+	}
+
+	/* Null-terminate */
+	if (b.pos < b.capacity)
+		b.data[b.pos] = '\0';
+	else
+		b.data[b.capacity - 1] = '\0';
+
+	*out_length = b.pos;
+	return s;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Polyline export                                                           */
+/* -------------------------------------------------------------------------- */
+
+qaws_status qaws_polyline_export_2d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_polyline_sampling sampling,
+	qaws_vec2* out_points,
+	unsigned int* out_count)
+{
+	if (!curve || !out_points || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+	if (qaws_curve_get_dimension(curve) != QAWS_DIMENSION_2D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sampling == QAWS_POLYLINE_CURVATURE)
+	{
+		return qaws_curve_sample_curvature_weighted_2d(
+			curve, sample_count, out_points, sample_count, out_count);
+	}
+	else
+	{
+		qaws_range range;
+		qaws_scalar t, dt;
+		unsigned int i;
+
+		range = qaws_curve_get_parameter_range(curve);
+		dt = (range.max_value - range.min_value) / (qaws_scalar)(sample_count - 1);
+
+		for (i = 0; i < sample_count; i++)
+		{
+			qaws_eval_result_2d r;
+			qaws_status s;
+
+			t = (i == sample_count - 1) ? range.max_value : range.min_value + dt * (qaws_scalar)i;
+			s = qaws_curve_evaluate_2d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+			if (s != QAWS_STATUS_OK)
+			{
+				*out_count = i;
+				return s;
+			}
+			out_points[i] = r.position;
+		}
+
+		*out_count = sample_count;
+		return QAWS_STATUS_OK;
+	}
+}
+
+qaws_status qaws_polyline_export_3d(
+	qaws_curve const* curve,
+	unsigned int sample_count,
+	qaws_polyline_sampling sampling,
+	qaws_vec3* out_points,
+	unsigned int* out_count)
+{
+	if (!curve || !out_points || !out_count)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+	if (sample_count < 2)
+		return QAWS_STATUS_INVALID_ARGUMENT;
+	if (qaws_curve_get_dimension(curve) != QAWS_DIMENSION_3D)
+		return QAWS_STATUS_INVALID_DIMENSION;
+
+	if (sampling == QAWS_POLYLINE_CURVATURE)
+	{
+		return qaws_curve_sample_curvature_weighted_3d(
+			curve, sample_count, out_points, sample_count, out_count);
+	}
+	else
+	{
+		qaws_range range;
+		qaws_scalar t, dt;
+		unsigned int i;
+
+		range = qaws_curve_get_parameter_range(curve);
+		dt = (range.max_value - range.min_value) / (qaws_scalar)(sample_count - 1);
+
+		for (i = 0; i < sample_count; i++)
+		{
+			qaws_eval_result_3d r;
+			qaws_status s;
+
+			t = (i == sample_count - 1) ? range.max_value : range.min_value + dt * (qaws_scalar)i;
+			s = qaws_curve_evaluate_3d(curve, t, QAWS_EVAL_FLAG_POSITION, &r);
+			if (s != QAWS_STATUS_OK)
+			{
+				*out_count = i;
+				return s;
+			}
+			out_points[i] = r.position;
+		}
+
+		*out_count = sample_count;
+		return QAWS_STATUS_OK;
+	}
 }

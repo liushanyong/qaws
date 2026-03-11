@@ -970,13 +970,13 @@ static qaws_status yuksel_eval_span_3d(
 	return QAWS_STATUS_OK;
 }
 
-static void yuksel_destroy_impl(void* impl_ptr)
+static void yuksel_destroy_impl(void* impl_ptr, qaws_allocator const* allocator)
 {
 	qaws_yuksel_impl* impl = (qaws_yuksel_impl*)impl_ptr;
 	if (impl) {
-		free(impl->control_points);
-		free(impl->subcurves);
-		free(impl);
+		qaws_internal_dealloc(allocator, impl->control_points);
+		qaws_internal_dealloc(allocator, impl->subcurves);
+		qaws_internal_dealloc(allocator, impl);
 	}
 }
 

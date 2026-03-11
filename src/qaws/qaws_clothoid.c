@@ -145,10 +145,10 @@ static qaws_status clothoid_eval_span_3d(
  * Vtable: destroy
  * ------------------------------------------------------------------------- */
 
-static void clothoid_destroy_impl(void *impl)
+static void clothoid_destroy_impl(void *impl, qaws_allocator const* allocator)
 {
 	if (impl)
-		free(impl);
+		qaws_internal_dealloc(allocator, impl);
 }
 
 /* ---------------------------------------------------------------------------

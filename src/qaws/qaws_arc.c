@@ -174,13 +174,13 @@ static qaws_status arc_eval_span_3d(
  * Vtable: destroy
  * ------------------------------------------------------------------------- */
 
-static void arc_destroy_impl(void *impl)
+static void arc_destroy_impl(void *impl, qaws_allocator const *allocator)
 {
 	qaws_arc_impl *ai = (qaws_arc_impl *)impl;
 	if (ai)
 	{
-		free(ai->segments);
-		free(ai);
+		qaws_internal_dealloc(allocator, ai->segments);
+		qaws_internal_dealloc(allocator, ai);
 	}
 }
 
