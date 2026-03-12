@@ -27,6 +27,7 @@ option(
 )
 
 option(QAWS_DISABLE_STRICT_ALIASING "Compile with -fno-strict-aliasing on GCC/Clang" ON)
+option(QAWS_ENABLE_SIMD "Enable SIMD batch evaluation (auto-detect ISA)" OFF)
 option(QAWS_INSTALL "Enable install rules" ON)
 option(QAWS_INSTALL_PKGCONFIG "Install pkg-config .pc file" ON)
 
@@ -69,6 +70,7 @@ set(QAWS_SOURCES
   src/qaws/qaws_surface_swept.c
   src/qaws/qaws_surface_ruled.c
   src/qaws/qaws_inline.c
+  src/qaws/qaws_prepare.c
   src/qaws/internal/qaws_internal_curve.c
   src/qaws/internal/qaws_internal_basis.c
   src/qaws/internal/qaws_internal_span.c
@@ -77,6 +79,15 @@ set(QAWS_SOURCES
   src/qaws/internal/qaws_internal_validation.c
   src/qaws/internal/qaws_internal_surface.c
 )
+
+if(QAWS_ENABLE_SIMD)
+  list(APPEND QAWS_SOURCES
+    src/qaws/batch/qaws_batch_bezier.c
+    src/qaws/batch/qaws_batch_bspline.c
+    src/qaws/batch/qaws_batch_nurbs.c
+    src/qaws/batch/qaws_batch_surface.c
+  )
+endif()
 
 add_library(qaws ${QAWS_SOURCES})
 add_library(Qaws::qaws ALIAS qaws)
@@ -135,6 +146,31 @@ if(QAWS_ENABLE_WARNINGS)
     if(QAWS_WARNINGS_AS_ERRORS)
       target_compile_options(qaws PRIVATE -Werror)
     endif()
+  endif()
+endif()
+
+if(QAWS_ENABLE_SIMD)
+  include(CheckCSourceCompiles)
+  check_c_source_compiles("
+    #include <immintrin.h>
+    int main() { __m256 v = _mm256_setzero_ps(); (void)v; return 0; }" QAWS_HAS_AVX2)
+  check_c_source_compiles("
+    #include <emmintrin.h>
+    int main() { __m128 v = _mm_setzero_ps(); (void)v; return 0; }" QAWS_HAS_SSE2)
+  check_c_source_compiles("
+    #include <arm_neon.h>
+    int main() { float32x4_t v = vdupq_n_f32(0); (void)v; return 0; }" QAWS_HAS_NEON)
+  if(QAWS_HAS_AVX2)
+    target_compile_definitions(qaws PRIVATE QAWS_SIMD_AVX2=1)
+    if(MSVC)
+      target_compile_options(qaws PRIVATE /arch:AVX2)
+    else()
+      target_compile_options(qaws PRIVATE -mavx2 -mfma)
+    endif()
+  elseif(QAWS_HAS_SSE2)
+    target_compile_definitions(qaws PRIVATE QAWS_SIMD_SSE2=1)
+  elseif(QAWS_HAS_NEON)
+    target_compile_definitions(qaws PRIVATE QAWS_SIMD_NEON=1)
   endif()
 endif()
 
@@ -201,7 +237,27 @@ if(QAWS_INSTALL)
       src/qaws/qaws_surface_ruled.h
       src/qaws/qaws_alloc.h
       src/qaws/qaws_inline.h
+      src/qaws/qaws_platform.h
+      src/qaws/qaws_core_types.h
+      src/qaws/qaws_prepare.h
+      src/qaws/qaws_hlsl.h
+      src/qaws/qaws_glsl.h
+      src/qaws/qaws_halide.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  )
+
+  install(
+    FILES
+      src/qaws/core/qaws_decasteljau_core.h
+      src/qaws/core/qaws_cubic_poly_core.h
+      src/qaws/core/qaws_bspline_basis_core.h
+      src/qaws/core/qaws_bspline_eval_core.h
+      src/qaws/core/qaws_nurbs_eval_core.h
+      src/qaws/core/qaws_rational_bezier_core.h
+      src/qaws/core/qaws_horner_core.h
+      src/qaws/core/qaws_arc_core.h
+      src/qaws/core/qaws_surface_core.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/core
   )
 
   set(QAWS_CMAKE_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/Qaws")

@@ -5,6 +5,8 @@
 #include "internal/qaws_internal_validation.h"
 #include <stdlib.h>
 #include <string.h>
+#include "qaws_platform.h"
+#include "core/qaws_horner_core.h"
 
 typedef struct qaws_polynomial_impl
 {
@@ -41,7 +43,7 @@ static qaws_scalar poly_horner_d1(
 {
 	int i;
 	qaws_scalar result;
-	if (degree < 1) return (qaws_scalar)0;
+	if (degree < 1) return QAWS_ZERO;
 	result = (qaws_scalar)degree * coeffs[degree * dim_count];
 	for (i = (int)degree - 1; i >= 1; i--)
 		result = result * t + (qaws_scalar)i * coeffs[(unsigned int)i * dim_count];
@@ -57,7 +59,7 @@ static qaws_scalar poly_horner_d2(
 {
 	int i;
 	qaws_scalar result;
-	if (degree < 2) return (qaws_scalar)0;
+	if (degree < 2) return QAWS_ZERO;
 	result = (qaws_scalar)(degree * (degree - 1)) * coeffs[degree * dim_count];
 	for (i = (int)degree - 1; i >= 2; i--)
 		result = result * t + (qaws_scalar)(i * (i - 1)) * coeffs[(unsigned int)i * dim_count];
@@ -73,7 +75,7 @@ static qaws_scalar poly_horner_d3(
 {
 	int i;
 	qaws_scalar result;
-	if (degree < 3) return (qaws_scalar)0;
+	if (degree < 3) return QAWS_ZERO;
 	result = (qaws_scalar)(degree * (degree - 1) * (degree - 2)) * coeffs[degree * dim_count];
 	for (i = (int)degree - 1; i >= 3; i--)
 		result = result * t + (qaws_scalar)(i * (i - 1) * (i - 2)) * coeffs[(unsigned int)i * dim_count];
@@ -95,27 +97,32 @@ static qaws_status polynomial_eval_span_2d(
 	qaws_scalar t_min = curve->parameter_range.min_value;
 	qaws_scalar t_max = curve->parameter_range.max_value;
 	qaws_scalar t = t_min + local_t * (t_max - t_min);
+	qaws_eval_2d core;
 	(void)span_index;
 	memset(out_result, 0, sizeof(*out_result));
 
+	/* Core handles position, D1, D2 */
+	core = qaws_horner_eval_2d((qaws_scalar *)coeffs, (int)degree, t, (int)eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = poly_horner(coeffs + 0, degree, dim_count, t);
-		out_result->position.y = poly_horner(coeffs + 1, degree, dim_count, t);
+		out_result->position.x = core.position.x;
+		out_result->position.y = core.position.y;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if ((eval_flags & QAWS_EVAL_FLAG_D1) && degree >= 1) {
-		out_result->d1.x = poly_horner_d1(coeffs + 0, degree, dim_count, t);
-		out_result->d1.y = poly_horner_d1(coeffs + 1, degree, dim_count, t);
+		out_result->d1.x = core.d1.x;
+		out_result->d1.y = core.d1.y;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if ((eval_flags & QAWS_EVAL_FLAG_D2) && degree >= 2) {
-		out_result->d2.x = poly_horner_d2(coeffs + 0, degree, dim_count, t);
-		out_result->d2.y = poly_horner_d2(coeffs + 1, degree, dim_count, t);
+		out_result->d2.x = core.d2.x;
+		out_result->d2.y = core.d2.y;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
+	/* D3 is not supported by the core; compute manually */
 	if ((eval_flags & QAWS_EVAL_FLAG_D3) && degree >= 3) {
 		out_result->d3.x = poly_horner_d3(coeffs + 0, degree, dim_count, t);
 		out_result->d3.y = poly_horner_d3(coeffs + 1, degree, dim_count, t);
@@ -136,30 +143,35 @@ static qaws_status polynomial_eval_span_3d(
 	qaws_scalar t_min = curve->parameter_range.min_value;
 	qaws_scalar t_max = curve->parameter_range.max_value;
 	qaws_scalar t = t_min + local_t * (t_max - t_min);
+	qaws_eval_3d core;
 	(void)span_index;
 	memset(out_result, 0, sizeof(*out_result));
 
+	/* Core handles position, D1, D2 */
+	core = qaws_horner_eval_3d((qaws_scalar *)coeffs, (int)degree, t, (int)eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = poly_horner(coeffs + 0, degree, dim_count, t);
-		out_result->position.y = poly_horner(coeffs + 1, degree, dim_count, t);
-		out_result->position.z = poly_horner(coeffs + 2, degree, dim_count, t);
+		out_result->position.x = core.position.x;
+		out_result->position.y = core.position.y;
+		out_result->position.z = core.position.z;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if ((eval_flags & QAWS_EVAL_FLAG_D1) && degree >= 1) {
-		out_result->d1.x = poly_horner_d1(coeffs + 0, degree, dim_count, t);
-		out_result->d1.y = poly_horner_d1(coeffs + 1, degree, dim_count, t);
-		out_result->d1.z = poly_horner_d1(coeffs + 2, degree, dim_count, t);
+		out_result->d1.x = core.d1.x;
+		out_result->d1.y = core.d1.y;
+		out_result->d1.z = core.d1.z;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if ((eval_flags & QAWS_EVAL_FLAG_D2) && degree >= 2) {
-		out_result->d2.x = poly_horner_d2(coeffs + 0, degree, dim_count, t);
-		out_result->d2.y = poly_horner_d2(coeffs + 1, degree, dim_count, t);
-		out_result->d2.z = poly_horner_d2(coeffs + 2, degree, dim_count, t);
+		out_result->d2.x = core.d2.x;
+		out_result->d2.y = core.d2.y;
+		out_result->d2.z = core.d2.z;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
+	/* D3 is not supported by the core; compute manually */
 	if ((eval_flags & QAWS_EVAL_FLAG_D3) && degree >= 3) {
 		out_result->d3.x = poly_horner_d3(coeffs + 0, degree, dim_count, t);
 		out_result->d3.y = poly_horner_d3(coeffs + 1, degree, dim_count, t);

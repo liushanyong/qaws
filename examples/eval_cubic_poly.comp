@@ -1,0 +1,35 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../src/qaws/qaws_glsl.h"
+#include "../src/qaws/core/qaws_cubic_poly_core.h"
+
+layout(std430, binding = 0) readonly buffer SpanBuffer { float span_coeffs[]; };
+layout(std430, binding = 1) buffer OutBuffer { float results[]; };
+
+layout(push_constant) uniform Params {
+    uint span_count;
+    uint sample_count;
+};
+
+layout(local_size_x = 256) in;
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= sample_count)
+        return;
+
+    float global_t = float(idx) / float(sample_count - 1u) * float(span_count);
+    uint span = min(uint(global_t), span_count - 1u);
+    float local_t = global_t - float(span);
+
+    uint base = span * 8u;
+    qaws_vec2 a = qaws_vec2(span_coeffs[base + 0u], span_coeffs[base + 4u]);
+    qaws_vec2 b = qaws_vec2(span_coeffs[base + 1u], span_coeffs[base + 5u]);
+    qaws_vec2 c = qaws_vec2(span_coeffs[base + 2u], span_coeffs[base + 6u]);
+    qaws_vec2 d = qaws_vec2(span_coeffs[base + 3u], span_coeffs[base + 7u]);
+
+    qaws_eval_2d result = qaws_cubic_eval_2d(a, b, c, d, local_t, 1);
+    results[idx * 2u]      = result.position.x;
+    results[idx * 2u + 1u] = result.position.y;
+}

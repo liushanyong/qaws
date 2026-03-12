@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "qaws_platform.h"
 
 /* Evaluate a row of Bezier CPs at parameter t using de Casteljau.
    cp: flat array of 3 scalars per point, stride = v_count * 3.
@@ -29,9 +30,9 @@ static void decasteljau_row(
 	for (k = 1; k <= degree; k++)
 		for (i = 0; i <= degree - k; i++)
 		{
-			buf[i * 3 + 0] = ((qaws_scalar)1 - t) * buf[i * 3 + 0] + t * buf[(i + 1) * 3 + 0];
-			buf[i * 3 + 1] = ((qaws_scalar)1 - t) * buf[i * 3 + 1] + t * buf[(i + 1) * 3 + 1];
-			buf[i * 3 + 2] = ((qaws_scalar)1 - t) * buf[i * 3 + 2] + t * buf[(i + 1) * 3 + 2];
+			buf[i * 3 + 0] = (QAWS_ONE - t) * buf[i * 3 + 0] + t * buf[(i + 1) * 3 + 0];
+			buf[i * 3 + 1] = (QAWS_ONE - t) * buf[i * 3 + 1] + t * buf[(i + 1) * 3 + 1];
+			buf[i * 3 + 2] = (QAWS_ONE - t) * buf[i * 3 + 2] + t * buf[(i + 1) * 3 + 2];
 		}
 	out[0] = buf[0]; out[1] = buf[1]; out[2] = buf[2];
 }
@@ -60,8 +61,8 @@ static void compute_normal(qaws_vec3 du, qaws_vec3 dv, qaws_vec3* out)
 	qaws_scalar nx = du.y * dv.z - du.z * dv.y;
 	qaws_scalar ny = du.z * dv.x - du.x * dv.z;
 	qaws_scalar nz = du.x * dv.y - du.y * dv.x;
-	qaws_scalar len = (qaws_scalar)sqrt((double)(nx * nx + ny * ny + nz * nz));
-	if (len > (qaws_scalar)1e-12)
+	qaws_scalar len = QAWS_SQRT(nx * nx + ny * ny + nz * nz);
+	if (len > QAWS_LITERAL(1e-12))
 	{
 		out->x = nx / len; out->y = ny / len; out->z = nz / len;
 	}

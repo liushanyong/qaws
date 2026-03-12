@@ -6,6 +6,9 @@
 #include "internal/qaws_internal_validation.h"
 #include <stdlib.h>
 #include <string.h>
+#include "qaws_platform.h"
+#include "qaws_core_types.h"
+#include "core/qaws_bspline_eval_core.h"
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
@@ -31,7 +34,7 @@ static qaws_status generate_uniform_knots(
 
 	/* First degree+1 knots = 0 (clamped) */
 	for (i = 0; i <= degree; i++)
-		knots[i] = (qaws_scalar)0.0;
+		knots[i] = QAWS_ZERO;
 
 	/* Internal knots: uniformly spaced */
 	for (i = 0; i < n_internal; i++)
@@ -65,7 +68,7 @@ static qaws_status bspline_eval_span_2d(
 	unsigned int knot_span;
 	unsigned int max_deriv_order = 0;
 	unsigned int stride;
-	qaws_scalar *ders_buf;
+	qaws_scalar ders_buf[4 * QAWS_CORE_MAX_POINTS]; /* (max_deriv+1) * (degree+1), bounded */
 	unsigned int j;
 
 	memset(out_result, 0, sizeof(*out_result));
@@ -94,12 +97,6 @@ static qaws_status bspline_eval_span_2d(
 
 	stride = degree + 1;
 
-	/* Allocate buffer for basis function derivatives */
-	ders_buf = (qaws_scalar *)malloc(
-		sizeof(qaws_scalar) * (size_t)((max_deriv_order + 1) * stride));
-	if (!ders_buf)
-		return QAWS_STATUS_ALLOCATION_FAILURE;
-
 	/* Compute basis function derivatives */
 	qaws_internal_bspline_basis_derivs(
 		impl->knots, impl->knot_count,
@@ -108,8 +105,8 @@ static qaws_status bspline_eval_span_2d(
 
 	/* Evaluate position */
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[0 * stride + j];
@@ -123,8 +120,8 @@ static qaws_status bspline_eval_span_2d(
 
 	/* Evaluate first derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D1) && max_deriv_order >= 1) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[1 * stride + j];
@@ -138,8 +135,8 @@ static qaws_status bspline_eval_span_2d(
 
 	/* Evaluate second derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D2) && max_deriv_order >= 2) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[2 * stride + j];
@@ -153,8 +150,8 @@ static qaws_status bspline_eval_span_2d(
 
 	/* Evaluate third derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D3) && max_deriv_order >= 3) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[3 * stride + j];
@@ -166,7 +163,6 @@ static qaws_status bspline_eval_span_2d(
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
-	free(ders_buf);
 	return QAWS_STATUS_OK;
 }
 
@@ -189,7 +185,7 @@ static qaws_status bspline_eval_span_3d(
 	unsigned int knot_span;
 	unsigned int max_deriv_order = 0;
 	unsigned int stride;
-	qaws_scalar *ders_buf;
+	qaws_scalar ders_buf[4 * QAWS_CORE_MAX_POINTS]; /* (max_deriv+1) * (degree+1), bounded */
 	unsigned int j;
 
 	memset(out_result, 0, sizeof(*out_result));
@@ -217,12 +213,6 @@ static qaws_status bspline_eval_span_3d(
 
 	stride = degree + 1;
 
-	/* Allocate buffer for basis function derivatives */
-	ders_buf = (qaws_scalar *)malloc(
-		sizeof(qaws_scalar) * (size_t)((max_deriv_order + 1) * stride));
-	if (!ders_buf)
-		return QAWS_STATUS_ALLOCATION_FAILURE;
-
 	/* Compute basis function derivatives */
 	qaws_internal_bspline_basis_derivs(
 		impl->knots, impl->knot_count,
@@ -231,9 +221,9 @@ static qaws_status bspline_eval_span_3d(
 
 	/* Evaluate position */
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
-		qaws_scalar vz = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
+		qaws_scalar vz = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[0 * stride + j];
@@ -249,9 +239,9 @@ static qaws_status bspline_eval_span_3d(
 
 	/* Evaluate first derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D1) && max_deriv_order >= 1) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
-		qaws_scalar vz = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
+		qaws_scalar vz = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[1 * stride + j];
@@ -267,9 +257,9 @@ static qaws_status bspline_eval_span_3d(
 
 	/* Evaluate second derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D2) && max_deriv_order >= 2) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
-		qaws_scalar vz = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
+		qaws_scalar vz = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[2 * stride + j];
@@ -285,9 +275,9 @@ static qaws_status bspline_eval_span_3d(
 
 	/* Evaluate third derivative */
 	if ((eval_flags & QAWS_EVAL_FLAG_D3) && max_deriv_order >= 3) {
-		qaws_scalar vx = (qaws_scalar)0.0;
-		qaws_scalar vy = (qaws_scalar)0.0;
-		qaws_scalar vz = (qaws_scalar)0.0;
+		qaws_scalar vx = QAWS_ZERO;
+		qaws_scalar vy = QAWS_ZERO;
+		qaws_scalar vz = QAWS_ZERO;
 		for (j = 0; j <= degree; j++) {
 			unsigned int cp_idx = (knot_span - degree + j) * dim_count;
 			qaws_scalar basis = ders_buf[3 * stride + j];
@@ -301,7 +291,6 @@ static qaws_status bspline_eval_span_3d(
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
-	free(ders_buf);
 	return QAWS_STATUS_OK;
 }
 

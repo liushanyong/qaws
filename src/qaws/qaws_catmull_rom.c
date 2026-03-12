@@ -1,12 +1,15 @@
 #include "qaws_catmull_rom.h"
 #include "qaws_curve.h"
+#include "qaws_prepare.h"
 #include "internal/qaws_internal_types.h"
 #include "internal/qaws_internal_curve.h"
 #include "internal/qaws_internal_basis.h"
 #include "internal/qaws_internal_validation.h"
+#include "core/qaws_cubic_poly_core.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "qaws_platform.h"
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
@@ -16,14 +19,14 @@ static qaws_scalar compute_alpha(qaws_parameterization param)
 {
 	switch (param) {
 	case QAWS_PARAMETERIZATION_UNIFORM:
-		return (qaws_scalar)0.0;
+		return QAWS_ZERO;
 	case QAWS_PARAMETERIZATION_CHORDAL:
-		return (qaws_scalar)1.0;
+		return QAWS_ONE;
 	case QAWS_PARAMETERIZATION_CENTRIPETAL:
-		return (qaws_scalar)0.5;
+		return QAWS_LITERAL(0.5);
 	case QAWS_PARAMETERIZATION_DEFAULT:
 	default:
-		return (qaws_scalar)0.5; /* default is centripetal */
+		return QAWS_LITERAL(0.5); /* default is centripetal */
 	}
 }
 
@@ -36,96 +39,24 @@ static void compute_knot_params(
 {
 	unsigned int i, d;
 
-	knot_params[0] = (qaws_scalar)0.0;
+	knot_params[0] = QAWS_ZERO;
 
 	for (i = 1; i < control_point_count; i++) {
-		qaws_scalar dist_sq = (qaws_scalar)0.0;
+		qaws_scalar dist_sq = QAWS_ZERO;
 		for (d = 0; d < dim_count; d++) {
 			qaws_scalar diff = control_points[i * dim_count + d]
 			                 - control_points[(i - 1) * dim_count + d];
 			dist_sq += diff * diff;
 		}
 
-		if (alpha == (qaws_scalar)0.0) {
+		if (alpha == QAWS_ZERO) {
 			/* Uniform: each interval = 1 */
-			knot_params[i] = knot_params[i - 1] + (qaws_scalar)1.0;
+			knot_params[i] = knot_params[i - 1] + QAWS_ONE;
 		} else {
-			qaws_scalar dist = (qaws_scalar)sqrt((double)dist_sq);
-			qaws_scalar interval = (qaws_scalar)pow((double)dist, (double)alpha);
+			qaws_scalar dist = QAWS_SQRT(dist_sq);
+			qaws_scalar interval = QAWS_POW(dist, alpha);
 			knot_params[i] = knot_params[i - 1] + interval;
 		}
-	}
-}
-
-static void compute_segment_coefficients(
-	qaws_scalar const *P0,
-	qaws_scalar const *P1,
-	qaws_scalar const *P2,
-	qaws_scalar const *P3,
-	qaws_scalar t0,
-	qaws_scalar t1,
-	qaws_scalar t2,
-	qaws_scalar t3,
-	unsigned int dim_count,
-	qaws_scalar *coeffs_out)  /* dim_count * 4 scalars */
-{
-	unsigned int d;
-	qaws_scalar dt10 = t1 - t0;
-	qaws_scalar dt21 = t2 - t1;
-	qaws_scalar dt20 = t2 - t0;
-	qaws_scalar dt32 = t3 - t2;
-	qaws_scalar dt31 = t3 - t1;
-
-	/* Clamp tiny intervals to avoid division by zero */
-	if (dt10 < (qaws_scalar)1e-10 && dt10 > (qaws_scalar)-1e-10)
-		dt10 = (qaws_scalar)0.0;
-	if (dt21 < (qaws_scalar)1e-10 && dt21 > (qaws_scalar)-1e-10)
-		dt21 = (qaws_scalar)0.0;
-	if (dt20 < (qaws_scalar)1e-10 && dt20 > (qaws_scalar)-1e-10)
-		dt20 = (qaws_scalar)0.0;
-	if (dt32 < (qaws_scalar)1e-10 && dt32 > (qaws_scalar)-1e-10)
-		dt32 = (qaws_scalar)0.0;
-	if (dt31 < (qaws_scalar)1e-10 && dt31 > (qaws_scalar)-1e-10)
-		dt31 = (qaws_scalar)0.0;
-
-	for (d = 0; d < dim_count; d++) {
-		qaws_scalar p0 = P0[d];
-		qaws_scalar p1 = P1[d];
-		qaws_scalar p2 = P2[d];
-		qaws_scalar p3 = P3[d];
-		qaws_scalar m1, m2, M1, M2;
-		qaws_scalar a_coeff, b_coeff, c_coeff, d_coeff;
-
-		/* Compute tangent at P1 */
-		m1 = (qaws_scalar)0.0;
-		if (dt21 != (qaws_scalar)0.0 && dt20 != (qaws_scalar)0.0 && dt10 != (qaws_scalar)0.0) {
-			m1 = (p2 - p1) / dt21
-			   - (p2 - p0) / dt20
-			   + (p1 - p0) / dt10;
-		}
-
-		/* Compute tangent at P2 */
-		m2 = (qaws_scalar)0.0;
-		if (dt32 != (qaws_scalar)0.0 && dt31 != (qaws_scalar)0.0 && dt21 != (qaws_scalar)0.0) {
-			m2 = (p3 - p2) / dt32
-			   - (p3 - p1) / dt31
-			   + (p2 - p1) / dt21;
-		}
-
-		/* Scale tangents to unit interval */
-		M1 = m1 * dt21;
-		M2 = m2 * dt21;
-
-		/* Hermite to power basis: P(u) = a*u^3 + b*u^2 + c*u + d */
-		d_coeff = p1;
-		c_coeff = M1;
-		b_coeff = (qaws_scalar)3.0 * (p2 - p1) - (qaws_scalar)2.0 * M1 - M2;
-		a_coeff = (qaws_scalar)2.0 * (p1 - p2) + M1 + M2;
-
-		coeffs_out[d * 4 + 0] = a_coeff;
-		coeffs_out[d * 4 + 1] = b_coeff;
-		coeffs_out[d * 4 + 2] = c_coeff;
-		coeffs_out[d * 4 + 3] = d_coeff;
 	}
 }
 
@@ -143,13 +74,12 @@ static qaws_status catmull_rom_eval_span_2d(
 	qaws_catmull_rom_impl const *impl =
 		(qaws_catmull_rom_impl const *)curve->impl;
 	unsigned int const dim_count = 2;
-	qaws_scalar t = local_t;
-	qaws_scalar t2 = t * t;
-	qaws_scalar t3 = t2 * t;
 	qaws_scalar const *cx;
 	qaws_scalar const *cy;
 	qaws_scalar ax, bx, cx_coeff, dx_val;
 	qaws_scalar ay, by, cy_coeff, dy_val;
+	qaws_vec2 va, vb, vc, vd;
+	qaws_eval_2d core;
 
 	(void)curve;
 
@@ -161,27 +91,31 @@ static qaws_status catmull_rom_eval_span_2d(
 	ax = cx[0]; bx = cx[1]; cx_coeff = cx[2]; dx_val = cx[3];
 	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
 
+	va.x = ax; va.y = ay;
+	vb.x = bx; vb.y = by;
+	vc.x = cx_coeff; vc.y = cy_coeff;
+	vd.x = dx_val; vd.y = dy_val;
+
+	core = qaws_cubic_eval_2d(va, vb, vc, vd, local_t, eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
-		out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
+		out_result->position = core.position;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D1) {
-		out_result->d1.x = (qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff;
-		out_result->d1.y = (qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff;
+		out_result->d1 = core.d1;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D2) {
-		out_result->d2.x = (qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx;
-		out_result->d2.y = (qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by;
+		out_result->d2 = core.d2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D3) {
-		out_result->d3.x = (qaws_scalar)6.0 * ax;
-		out_result->d3.y = (qaws_scalar)6.0 * ay;
+		out_result->d3.x = QAWS_LITERAL(6.0) * ax;
+		out_result->d3.y = QAWS_LITERAL(6.0) * ay;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -202,15 +136,14 @@ static qaws_status catmull_rom_eval_span_3d(
 	qaws_catmull_rom_impl const *impl =
 		(qaws_catmull_rom_impl const *)curve->impl;
 	unsigned int const dim_count = 3;
-	qaws_scalar t = local_t;
-	qaws_scalar t2 = t * t;
-	qaws_scalar t3 = t2 * t;
 	qaws_scalar const *cx;
 	qaws_scalar const *cy;
 	qaws_scalar const *cz;
 	qaws_scalar ax, bx, cx_coeff, dx_val;
 	qaws_scalar ay, by, cy_coeff, dy_val;
 	qaws_scalar az, bz, cz_coeff, dz_val;
+	qaws_vec3 va, vb, vc, vd;
+	qaws_eval_3d core;
 
 	(void)curve;
 
@@ -224,31 +157,32 @@ static qaws_status catmull_rom_eval_span_3d(
 	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
 	az = cz[0]; bz = cz[1]; cz_coeff = cz[2]; dz_val = cz[3];
 
+	va.x = ax; va.y = ay; va.z = az;
+	vb.x = bx; vb.y = by; vb.z = bz;
+	vc.x = cx_coeff; vc.y = cy_coeff; vc.z = cz_coeff;
+	vd.x = dx_val; vd.y = dy_val; vd.z = dz_val;
+
+	core = qaws_cubic_eval_3d(va, vb, vc, vd, local_t, eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
-		out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
-		out_result->position.z = az * t3 + bz * t2 + cz_coeff * t + dz_val;
+		out_result->position = core.position;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D1) {
-		out_result->d1.x = (qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff;
-		out_result->d1.y = (qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff;
-		out_result->d1.z = (qaws_scalar)3.0 * az * t2 + (qaws_scalar)2.0 * bz * t + cz_coeff;
+		out_result->d1 = core.d1;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D2) {
-		out_result->d2.x = (qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx;
-		out_result->d2.y = (qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by;
-		out_result->d2.z = (qaws_scalar)6.0 * az * t + (qaws_scalar)2.0 * bz;
+		out_result->d2 = core.d2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D3) {
-		out_result->d3.x = (qaws_scalar)6.0 * ax;
-		out_result->d3.y = (qaws_scalar)6.0 * ay;
-		out_result->d3.z = (qaws_scalar)6.0 * az;
+		out_result->d3.x = QAWS_LITERAL(6.0) * ax;
+		out_result->d3.y = QAWS_LITERAL(6.0) * ay;
+		out_result->d3.z = QAWS_LITERAL(6.0) * az;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -389,7 +323,7 @@ qaws_status qaws_curve_create_catmull_rom_ex(
 	compute_knot_params(impl->control_points, N, dim_count,
 	                    alpha, impl->knot_params);
 
-	/* Allocate segment coefficients */
+	/* Compute segment coefficients via prepare functions */
 	{
 		size_t coeffs_size = (size_t)(span_count * dim_count * 4) * sizeof(qaws_scalar);
 		impl->segment_coeffs = (qaws_scalar *)qaws_internal_alloc(allocator,
@@ -400,106 +334,81 @@ qaws_status qaws_curve_create_catmull_rom_ex(
 			qaws_internal_dealloc(allocator, impl);
 			return QAWS_STATUS_ALLOCATION_FAILURE;
 		}
-		memset(impl->segment_coeffs, 0, coeffs_size);
-	}
 
-	/* Compute segment coefficients */
-	if (desc->closed) {
-		for (s = 0; s < span_count; s++) {
-			int i0 = (((int)s - 1) % (int)N + (int)N) % (int)N;
-			int i1 = (int)s;
-			int i2 = (int)((s + 1) % N);
-			int i3 = (int)((s + 2) % N);
-
-			qaws_scalar const *P0 = &impl->control_points[i0 * (int)dim_count];
-			qaws_scalar const *P1 = &impl->control_points[i1 * (int)dim_count];
-			qaws_scalar const *P2 = &impl->control_points[i2 * (int)dim_count];
-			qaws_scalar const *P3 = &impl->control_points[i3 * (int)dim_count];
-
-			/*
-			 * Build local knot values for these four points.
-			 * Start from knot of i1 = 0, then compute relative
-			 * distances.
-			 */
-			qaws_scalar lt0, lt1, lt2, lt3;
-			lt1 = (qaws_scalar)0.0;
-
-			/* lt0: distance from i0 to i1 */
-			{
-				qaws_scalar dist_sq = (qaws_scalar)0.0;
-				unsigned int d;
-				for (d = 0; d < dim_count; d++) {
-					qaws_scalar diff = P1[d] - P0[d];
-					dist_sq += diff * diff;
-				}
-				if (alpha == (qaws_scalar)0.0)
-					lt0 = -(qaws_scalar)1.0;
-				else
-					lt0 = -(qaws_scalar)pow((double)sqrt((double)dist_sq),
-					                        (double)alpha);
+		if (dim_count == 2) {
+			qaws_vec2 *tmp_a, *tmp_b, *tmp_c, *tmp_d;
+			unsigned int prep_span_count = 0;
+			size_t vec_size = (size_t)span_count * sizeof(qaws_vec2);
+			tmp_a = (qaws_vec2 *)qaws_internal_alloc(allocator, (unsigned long)(vec_size * 4));
+			if (!tmp_a) {
+				qaws_internal_dealloc(allocator, impl->segment_coeffs);
+				qaws_internal_dealloc(allocator, impl->knot_params);
+				qaws_internal_dealloc(allocator, impl->control_points);
+				qaws_internal_dealloc(allocator, impl);
+				return QAWS_STATUS_ALLOCATION_FAILURE;
 			}
+			tmp_b = tmp_a + span_count;
+			tmp_c = tmp_b + span_count;
+			tmp_d = tmp_c + span_count;
 
-			/* lt2: distance from i1 to i2 */
-			{
-				qaws_scalar dist_sq = (qaws_scalar)0.0;
-				unsigned int d;
-				for (d = 0; d < dim_count; d++) {
-					qaws_scalar diff = P2[d] - P1[d];
-					dist_sq += diff * diff;
-				}
-				if (alpha == (qaws_scalar)0.0)
-					lt2 = (qaws_scalar)1.0;
-				else
-					lt2 = (qaws_scalar)pow((double)sqrt((double)dist_sq),
-					                       (double)alpha);
+			qaws_catmull_rom_prepare_2d(
+				(const qaws_vec2 *)impl->control_points, N,
+				impl->parameterization, impl->closed,
+				tmp_a, tmp_b, tmp_c, tmp_d, &prep_span_count);
+
+			for (s = 0; s < span_count; s++) {
+				impl->segment_coeffs[s * 8 + 0] = tmp_a[s].x;
+				impl->segment_coeffs[s * 8 + 1] = tmp_b[s].x;
+				impl->segment_coeffs[s * 8 + 2] = tmp_c[s].x;
+				impl->segment_coeffs[s * 8 + 3] = tmp_d[s].x;
+				impl->segment_coeffs[s * 8 + 4] = tmp_a[s].y;
+				impl->segment_coeffs[s * 8 + 5] = tmp_b[s].y;
+				impl->segment_coeffs[s * 8 + 6] = tmp_c[s].y;
+				impl->segment_coeffs[s * 8 + 7] = tmp_d[s].y;
 			}
-
-			/* lt3: distance from i2 to i3 */
-			{
-				qaws_scalar dist_sq = (qaws_scalar)0.0;
-				unsigned int d;
-				for (d = 0; d < dim_count; d++) {
-					qaws_scalar diff = P3[d] - P2[d];
-					dist_sq += diff * diff;
-				}
-				if (alpha == (qaws_scalar)0.0)
-					lt3 = lt2 + (qaws_scalar)1.0;
-				else
-					lt3 = lt2 + (qaws_scalar)pow(
-						(double)sqrt((double)dist_sq),
-						(double)alpha);
+			qaws_internal_dealloc(allocator, tmp_a);
+		} else {
+			qaws_vec3 *tmp_a, *tmp_b, *tmp_c, *tmp_d;
+			unsigned int prep_span_count = 0;
+			size_t vec_size = (size_t)span_count * sizeof(qaws_vec3);
+			tmp_a = (qaws_vec3 *)qaws_internal_alloc(allocator, (unsigned long)(vec_size * 4));
+			if (!tmp_a) {
+				qaws_internal_dealloc(allocator, impl->segment_coeffs);
+				qaws_internal_dealloc(allocator, impl->knot_params);
+				qaws_internal_dealloc(allocator, impl->control_points);
+				qaws_internal_dealloc(allocator, impl);
+				return QAWS_STATUS_ALLOCATION_FAILURE;
 			}
+			tmp_b = tmp_a + span_count;
+			tmp_c = tmp_b + span_count;
+			tmp_d = tmp_c + span_count;
 
-			compute_segment_coefficients(
-				P0, P1, P2, P3,
-				lt0, lt1, lt2, lt3,
-				dim_count,
-				&impl->segment_coeffs[s * dim_count * 4]);
-		}
-	} else {
-		/* Open curve: segment s uses points [s, s+1, s+2, s+3] */
-		for (s = 0; s < span_count; s++) {
-			qaws_scalar const *P0 = &impl->control_points[(s + 0) * dim_count];
-			qaws_scalar const *P1 = &impl->control_points[(s + 1) * dim_count];
-			qaws_scalar const *P2 = &impl->control_points[(s + 2) * dim_count];
-			qaws_scalar const *P3 = &impl->control_points[(s + 3) * dim_count];
+			qaws_catmull_rom_prepare_3d(
+				(const qaws_vec3 *)impl->control_points, N,
+				impl->parameterization, impl->closed,
+				tmp_a, tmp_b, tmp_c, tmp_d, &prep_span_count);
 
-			qaws_scalar t0 = impl->knot_params[s + 0];
-			qaws_scalar t1 = impl->knot_params[s + 1];
-			qaws_scalar t2 = impl->knot_params[s + 2];
-			qaws_scalar t3 = impl->knot_params[s + 3];
-
-			compute_segment_coefficients(
-				P0, P1, P2, P3,
-				t0, t1, t2, t3,
-				dim_count,
-				&impl->segment_coeffs[s * dim_count * 4]);
+			for (s = 0; s < span_count; s++) {
+				impl->segment_coeffs[s * 12 + 0]  = tmp_a[s].x;
+				impl->segment_coeffs[s * 12 + 1]  = tmp_b[s].x;
+				impl->segment_coeffs[s * 12 + 2]  = tmp_c[s].x;
+				impl->segment_coeffs[s * 12 + 3]  = tmp_d[s].x;
+				impl->segment_coeffs[s * 12 + 4]  = tmp_a[s].y;
+				impl->segment_coeffs[s * 12 + 5]  = tmp_b[s].y;
+				impl->segment_coeffs[s * 12 + 6]  = tmp_c[s].y;
+				impl->segment_coeffs[s * 12 + 7]  = tmp_d[s].y;
+				impl->segment_coeffs[s * 12 + 8]  = tmp_a[s].z;
+				impl->segment_coeffs[s * 12 + 9]  = tmp_b[s].z;
+				impl->segment_coeffs[s * 12 + 10] = tmp_c[s].z;
+				impl->segment_coeffs[s * 12 + 11] = tmp_d[s].z;
+			}
+			qaws_internal_dealloc(allocator, tmp_a);
 		}
 	}
 
 	/* --- Allocate curve ------------------------------------------------ */
 
-	range.min_value = (qaws_scalar)0.0;
+	range.min_value = QAWS_ZERO;
 	range.max_value = (qaws_scalar)span_count;
 
 	curve = qaws_internal_curve_alloc_ex(

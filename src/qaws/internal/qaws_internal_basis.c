@@ -1,4 +1,5 @@
 #include "qaws_internal_basis.h"
+#include "../qaws_platform.h"
 #include <string.h>
 #include <math.h>
 
@@ -15,7 +16,7 @@ void qaws_internal_decasteljau(
 
 	memcpy(work, control_points, total * sizeof(qaws_scalar));
 
-	qaws_scalar one_minus_t = (qaws_scalar)1 - t;
+	qaws_scalar one_minus_t = QAWS_ONE - t;
 
 	for (unsigned int r = 1; r <= degree; r++) {
 		for (unsigned int i = 0; i <= degree - r; i++) {
@@ -57,30 +58,30 @@ void qaws_internal_hermite_basis(
 	qaws_scalar t2 = t * t;
 	qaws_scalar t3 = t2 * t;
 
-	out_h[0] = (qaws_scalar)2 * t3 - (qaws_scalar)3 * t2 + (qaws_scalar)1;
-	out_h[1] = t3 - (qaws_scalar)2 * t2 + t;
-	out_h[2] = (qaws_scalar)-2 * t3 + (qaws_scalar)3 * t2;
+	out_h[0] = QAWS_LITERAL(2.0) * t3 - QAWS_LITERAL(3.0) * t2 + QAWS_ONE;
+	out_h[1] = t3 - QAWS_LITERAL(2.0) * t2 + t;
+	out_h[2] = -QAWS_LITERAL(2.0) * t3 + QAWS_LITERAL(3.0) * t2;
 	out_h[3] = t3 - t2;
 
 	if (out_dh) {
-		out_dh[0] = (qaws_scalar)6 * t2 - (qaws_scalar)6 * t;
-		out_dh[1] = (qaws_scalar)3 * t2 - (qaws_scalar)4 * t + (qaws_scalar)1;
-		out_dh[2] = (qaws_scalar)-6 * t2 + (qaws_scalar)6 * t;
-		out_dh[3] = (qaws_scalar)3 * t2 - (qaws_scalar)2 * t;
+		out_dh[0] = QAWS_LITERAL(6.0) * t2 - QAWS_LITERAL(6.0) * t;
+		out_dh[1] = QAWS_LITERAL(3.0) * t2 - QAWS_LITERAL(4.0) * t + QAWS_ONE;
+		out_dh[2] = -QAWS_LITERAL(6.0) * t2 + QAWS_LITERAL(6.0) * t;
+		out_dh[3] = QAWS_LITERAL(3.0) * t2 - QAWS_LITERAL(2.0) * t;
 	}
 
 	if (out_d2h) {
-		out_d2h[0] = (qaws_scalar)12 * t - (qaws_scalar)6;
-		out_d2h[1] = (qaws_scalar)6 * t - (qaws_scalar)4;
-		out_d2h[2] = (qaws_scalar)-12 * t + (qaws_scalar)6;
-		out_d2h[3] = (qaws_scalar)6 * t - (qaws_scalar)2;
+		out_d2h[0] = QAWS_LITERAL(12.0) * t - QAWS_LITERAL(6.0);
+		out_d2h[1] = QAWS_LITERAL(6.0) * t - QAWS_LITERAL(4.0);
+		out_d2h[2] = -QAWS_LITERAL(12.0) * t + QAWS_LITERAL(6.0);
+		out_d2h[3] = QAWS_LITERAL(6.0) * t - QAWS_LITERAL(2.0);
 	}
 
 	if (out_d3h) {
-		out_d3h[0] = (qaws_scalar)12;
-		out_d3h[1] = (qaws_scalar)6;
-		out_d3h[2] = (qaws_scalar)-12;
-		out_d3h[3] = (qaws_scalar)6;
+		out_d3h[0] = QAWS_LITERAL(12.0);
+		out_d3h[1] = QAWS_LITERAL(6.0);
+		out_d3h[2] = -QAWS_LITERAL(12.0);
+		out_d3h[3] = QAWS_LITERAL(6.0);
 	}
 }
 
@@ -130,16 +131,16 @@ void qaws_internal_bspline_basis(
 
 	(void)knot_count;
 
-	out_basis[0] = (qaws_scalar)1;
+	out_basis[0] = QAWS_ONE;
 
 	for (unsigned int j = 1; j <= degree; j++) {
 		left[j] = t - knots[span + 1 - j];
 		right[j] = knots[span + j] - t;
-		qaws_scalar saved = (qaws_scalar)0;
+		qaws_scalar saved = QAWS_ZERO;
 
 		for (unsigned int r = 0; r < j; r++) {
 			qaws_scalar denom = right[r + 1] + left[j - r];
-			qaws_scalar temp = (denom != (qaws_scalar)0) ? out_basis[r] / denom : (qaws_scalar)0;
+			qaws_scalar temp = (denom != QAWS_ZERO) ? out_basis[r] / denom : QAWS_ZERO;
 			out_basis[r] = saved + right[r + 1] * temp;
 			saved = left[j - r] * temp;
 		}
@@ -167,12 +168,12 @@ void qaws_internal_bspline_basis_derivs(
 
 	(void)knot_count;
 
-	ndu[0] = (qaws_scalar)1;
+	ndu[0] = QAWS_ONE;
 
 	for (unsigned int j = 1; j <= p; j++) {
 		left_arr[j] = t - knots[span + 1 - j];
 		right_arr[j] = knots[span + j] - t;
-		qaws_scalar saved = (qaws_scalar)0;
+		qaws_scalar saved = QAWS_ZERO;
 
 		for (unsigned int r = 0; r < j; r++) {
 			ndu[j * order + r] = right_arr[r + 1] + left_arr[j - r];
@@ -192,10 +193,10 @@ void qaws_internal_bspline_basis_derivs(
 	for (unsigned int r = 0; r <= p; r++) {
 		int s1 = 0;
 		int s2 = 1;
-		a[0][0] = (qaws_scalar)1;
+		a[0][0] = QAWS_ONE;
 
 		for (unsigned int d = 1; d <= k; d++) {
-			qaws_scalar dd = (qaws_scalar)0;
+			qaws_scalar dd = QAWS_ZERO;
 			int rj = (int)r - (int)d;
 			int pk = (int)p - (int)d;
 

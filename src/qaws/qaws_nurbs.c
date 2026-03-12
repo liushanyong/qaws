@@ -6,6 +6,8 @@
 #include "internal/qaws_internal_validation.h"
 #include <stdlib.h>
 #include <string.h>
+#include "qaws_platform.h"
+#include "core/qaws_nurbs_eval_core.h"
 
 /* ---------------------------------------------------------------------------
  * Helpers
@@ -116,10 +118,10 @@ static qaws_status nurbs_eval_span_2d(
 	}
 
 	/* Check for degenerate weight */
-	if (W_deriv[0] < (qaws_scalar)1e-15 && W_deriv[0] > (qaws_scalar)-1e-15)
+	if (W_deriv[0] < QAWS_LITERAL(1e-15) && W_deriv[0] > -QAWS_LITERAL(1e-15))
 		return QAWS_STATUS_DEGENERATE_CURVE;
 
-	inv_w0 = (qaws_scalar)1.0 / W_deriv[0];
+	inv_w0 = QAWS_ONE / W_deriv[0];
 
 	/* Position: C = A[0] / W[0] */
 	for (d = 0; d < dim_count; ++d)
@@ -143,7 +145,7 @@ static qaws_status nurbs_eval_span_2d(
 	if (max_deriv >= 2)
 	{
 		for (d = 0; d < dim_count; ++d)
-			C2[d] = (A_deriv[2][d] - (qaws_scalar)2.0 * C1[d] * W_deriv[1] - C[d] * W_deriv[2]) * inv_w0;
+			C2[d] = (A_deriv[2][d] - QAWS_LITERAL(2.0) * C1[d] * W_deriv[1] - C[d] * W_deriv[2]) * inv_w0;
 		out_result->d2.x = C2[0];
 		out_result->d2.y = C2[1];
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
@@ -153,12 +155,12 @@ static qaws_status nurbs_eval_span_2d(
 	if (max_deriv >= 3)
 	{
 		out_result->d3.x = (A_deriv[3][0]
-			- (qaws_scalar)3.0 * C2[0] * W_deriv[1]
-			- (qaws_scalar)3.0 * C1[0] * W_deriv[2]
+			- QAWS_LITERAL(3.0) * C2[0] * W_deriv[1]
+			- QAWS_LITERAL(3.0) * C1[0] * W_deriv[2]
 			- C[0] * W_deriv[3]) * inv_w0;
 		out_result->d3.y = (A_deriv[3][1]
-			- (qaws_scalar)3.0 * C2[1] * W_deriv[1]
-			- (qaws_scalar)3.0 * C1[1] * W_deriv[2]
+			- QAWS_LITERAL(3.0) * C2[1] * W_deriv[1]
+			- QAWS_LITERAL(3.0) * C1[1] * W_deriv[2]
 			- C[1] * W_deriv[3]) * inv_w0;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
@@ -233,10 +235,10 @@ static qaws_status nurbs_eval_span_3d(
 	}
 
 	/* Check for degenerate weight */
-	if (W_deriv[0] < (qaws_scalar)1e-15 && W_deriv[0] > (qaws_scalar)-1e-15)
+	if (W_deriv[0] < QAWS_LITERAL(1e-15) && W_deriv[0] > -QAWS_LITERAL(1e-15))
 		return QAWS_STATUS_DEGENERATE_CURVE;
 
-	inv_w0 = (qaws_scalar)1.0 / W_deriv[0];
+	inv_w0 = QAWS_ONE / W_deriv[0];
 
 	/* Position: C = A[0] / W[0] */
 	for (d = 0; d < dim_count; ++d)
@@ -262,7 +264,7 @@ static qaws_status nurbs_eval_span_3d(
 	if (max_deriv >= 2)
 	{
 		for (d = 0; d < dim_count; ++d)
-			C2[d] = (A_deriv[2][d] - (qaws_scalar)2.0 * C1[d] * W_deriv[1] - C[d] * W_deriv[2]) * inv_w0;
+			C2[d] = (A_deriv[2][d] - QAWS_LITERAL(2.0) * C1[d] * W_deriv[1] - C[d] * W_deriv[2]) * inv_w0;
 		out_result->d2.x = C2[0];
 		out_result->d2.y = C2[1];
 		out_result->d2.z = C2[2];
@@ -273,16 +275,16 @@ static qaws_status nurbs_eval_span_3d(
 	if (max_deriv >= 3)
 	{
 		out_result->d3.x = (A_deriv[3][0]
-			- (qaws_scalar)3.0 * C2[0] * W_deriv[1]
-			- (qaws_scalar)3.0 * C1[0] * W_deriv[2]
+			- QAWS_LITERAL(3.0) * C2[0] * W_deriv[1]
+			- QAWS_LITERAL(3.0) * C1[0] * W_deriv[2]
 			- C[0] * W_deriv[3]) * inv_w0;
 		out_result->d3.y = (A_deriv[3][1]
-			- (qaws_scalar)3.0 * C2[1] * W_deriv[1]
-			- (qaws_scalar)3.0 * C1[1] * W_deriv[2]
+			- QAWS_LITERAL(3.0) * C2[1] * W_deriv[1]
+			- QAWS_LITERAL(3.0) * C1[1] * W_deriv[2]
 			- C[1] * W_deriv[3]) * inv_w0;
 		out_result->d3.z = (A_deriv[3][2]
-			- (qaws_scalar)3.0 * C2[2] * W_deriv[1]
-			- (qaws_scalar)3.0 * C1[2] * W_deriv[2]
+			- QAWS_LITERAL(3.0) * C2[2] * W_deriv[1]
+			- QAWS_LITERAL(3.0) * C1[2] * W_deriv[2]
 			- C[2] * W_deriv[3]) * inv_w0;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}

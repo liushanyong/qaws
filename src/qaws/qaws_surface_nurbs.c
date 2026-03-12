@@ -5,14 +5,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "qaws_platform.h"
 
 static void compute_normal(qaws_vec3 du, qaws_vec3 dv, qaws_vec3* out)
 {
 	qaws_scalar nx = du.y * dv.z - du.z * dv.y;
 	qaws_scalar ny = du.z * dv.x - du.x * dv.z;
 	qaws_scalar nz = du.x * dv.y - du.y * dv.x;
-	qaws_scalar len = (qaws_scalar)sqrt((double)(nx * nx + ny * ny + nz * nz));
-	if (len > (qaws_scalar)1e-12)
+	qaws_scalar len = QAWS_SQRT(nx * nx + ny * ny + nz * nz);
+	if (len > QAWS_LITERAL(1e-12))
 	{
 		out->x = nx / len; out->y = ny / len; out->z = nz / len;
 	}
@@ -115,10 +116,10 @@ static qaws_status nurbs_surface_eval(
 		}
 
 		/* Check for degenerate weight */
-		if (W[0][0] < (qaws_scalar)1e-15 && W[0][0] > (qaws_scalar)-1e-15)
+		if (W[0][0] < QAWS_LITERAL(1e-15) && W[0][0] > -QAWS_LITERAL(1e-15))
 			return QAWS_STATUS_DEGENERATE_CURVE;
 
-		inv_w0 = (qaws_scalar)1.0 / W[0][0];
+		inv_w0 = QAWS_ONE / W[0][0];
 
 		/* Position: S = A[0][0] / W[0][0] */
 		S00.x = A[0][0][0] * inv_w0;
@@ -163,9 +164,9 @@ static qaws_status nurbs_surface_eval(
 		Suu.x = Suu.y = Suu.z = 0;
 		if ((eval_flags & QAWS_SURFACE_EVAL_DUU) && max_u_deriv >= 2)
 		{
-			Suu.x = (A[2][0][0] - (qaws_scalar)2 * Su.x * W[1][0] - S00.x * W[2][0]) * inv_w0;
-			Suu.y = (A[2][0][1] - (qaws_scalar)2 * Su.y * W[1][0] - S00.y * W[2][0]) * inv_w0;
-			Suu.z = (A[2][0][2] - (qaws_scalar)2 * Su.z * W[1][0] - S00.z * W[2][0]) * inv_w0;
+			Suu.x = (A[2][0][0] - QAWS_LITERAL(2.0) * Su.x * W[1][0] - S00.x * W[2][0]) * inv_w0;
+			Suu.y = (A[2][0][1] - QAWS_LITERAL(2.0) * Su.y * W[1][0] - S00.y * W[2][0]) * inv_w0;
+			Suu.z = (A[2][0][2] - QAWS_LITERAL(2.0) * Su.z * W[1][0] - S00.z * W[2][0]) * inv_w0;
 			out_result->duu = Suu;
 			out_result->valid_flags |= QAWS_SURFACE_EVAL_DUU;
 		}
@@ -174,9 +175,9 @@ static qaws_status nurbs_surface_eval(
 		Svv.x = Svv.y = Svv.z = 0;
 		if ((eval_flags & QAWS_SURFACE_EVAL_DVV) && max_v_deriv >= 2)
 		{
-			Svv.x = (A[0][2][0] - (qaws_scalar)2 * Sv.x * W[0][1] - S00.x * W[0][2]) * inv_w0;
-			Svv.y = (A[0][2][1] - (qaws_scalar)2 * Sv.y * W[0][1] - S00.y * W[0][2]) * inv_w0;
-			Svv.z = (A[0][2][2] - (qaws_scalar)2 * Sv.z * W[0][1] - S00.z * W[0][2]) * inv_w0;
+			Svv.x = (A[0][2][0] - QAWS_LITERAL(2.0) * Sv.x * W[0][1] - S00.x * W[0][2]) * inv_w0;
+			Svv.y = (A[0][2][1] - QAWS_LITERAL(2.0) * Sv.y * W[0][1] - S00.y * W[0][2]) * inv_w0;
+			Svv.z = (A[0][2][2] - QAWS_LITERAL(2.0) * Sv.z * W[0][1] - S00.z * W[0][2]) * inv_w0;
 			out_result->dvv = Svv;
 			out_result->valid_flags |= QAWS_SURFACE_EVAL_DVV;
 		}

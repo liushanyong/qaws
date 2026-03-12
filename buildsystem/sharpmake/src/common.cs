@@ -12,7 +12,15 @@ namespace Qaws
         Double = 1 << 1   // double (64-bit)
     }
 
-    // Custom target with ScalarType
+    // SIMD fragment for batch evaluation
+    [Fragment, Flags]
+    public enum SimdMode
+    {
+        Off  = 1 << 0,
+        On   = 1 << 1
+    }
+
+    // Custom target with ScalarType and SimdMode
     [Generate]
     public class QawsTarget : Target
     {
@@ -21,13 +29,15 @@ namespace Qaws
         {
         }
 
-        public QawsTarget(Platform platform, DevEnv devEnv, Optimization optimization, ScalarType scalarType)
+        public QawsTarget(Platform platform, DevEnv devEnv, Optimization optimization, ScalarType scalarType, SimdMode simd = SimdMode.Off)
             : base(platform, devEnv, optimization)
         {
             Scalar = scalarType;
+            Simd = simd;
         }
 
         public ScalarType Scalar;
+        public SimdMode Simd;
     }
 
     // Common project base for all Qaws projects
@@ -46,16 +56,18 @@ namespace Qaws
                 Platform.win64,
                 DevEnv.vs2022,
                 Optimization.Debug | Optimization.Release,
-                ScalarType.Float | ScalarType.Double
+                ScalarType.Float | ScalarType.Double,
+                SimdMode.Off | SimdMode.On
             ));
         }
 
         [Configure()]
         public virtual void ConfigureAll(Configuration conf, QawsTarget target)
         {
-            // Name includes scalar type: Debug_f32, Release_f64, etc.
+            // Name includes scalar type and SIMD: Debug_f32, Release_f64_simd, etc.
             string scalarSuffix = (target.Scalar == ScalarType.Float) ? "f32" : "f64";
-            conf.Name = "[target.Optimization]_" + scalarSuffix;
+            string simdSuffix = (target.Simd == SimdMode.On) ? "_simd" : "";
+            conf.Name = "[target.Optimization]_" + scalarSuffix + simdSuffix;
 
             conf.ProjectFileName = "[project.Name]_[target.DevEnv]_[target.Platform]";
             conf.ProjectPath = Path.Combine("[project.SharpmakeCsPath]", "..", "..", "..", "projects", "[project.Name]");
@@ -108,6 +120,18 @@ namespace Qaws
                 conf.Options.Add(Options.Vc.Compiler.Optimization.MaximizeSpeed);
                 conf.Options.Add(Options.Vc.Compiler.RuntimeLibrary.MultiThreaded);
                 conf.Options.Add(Options.Vc.Compiler.Inline.AnySuitable);
+            }
+
+            // SIMD batch evaluation support
+            if (target.GetFragment<SimdMode>() == SimdMode.On)
+            {
+                conf.Defines.Add("QAWS_SIMD_AVX2=1");
+                conf.AdditionalCompilerOptions.Add("/arch:AVX2");
+            }
+            else
+            {
+                // Exclude batch/ sources when SIMD is off
+                conf.SourceFilesBuildExcludeRegex.Add(@"[\\/]batch[\\/]");
             }
 
             // Set working directory for Visual Studio debugging

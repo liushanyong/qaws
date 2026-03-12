@@ -1,0 +1,48 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../src/qaws/qaws_glsl.h"
+#include "../src/qaws/core/qaws_bspline_basis_core.h"
+#include "../src/qaws/core/qaws_bspline_eval_core.h"
+
+layout(std430, binding = 0) readonly buffer KnotBuffer { float knots[]; };
+layout(std430, binding = 1) readonly buffer CPBuffer   { float control_points[]; };
+layout(std430, binding = 2) buffer OutBuffer           { float results[]; };
+
+layout(push_constant) uniform Params {
+    uint degree;
+    uint num_cp;
+    uint sample_count;
+};
+
+layout(local_size_x = 256) in;
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= sample_count)
+        return;
+
+    float t_min = knots[degree];
+    float t_max = knots[num_cp];
+    float t = t_min + float(idx) / float(sample_count - 1u) * (t_max - t_min);
+
+    float local_knots[QAWS_CORE_MAX_POINTS * 2];
+    float local_cp[QAWS_CORE_MAX_POINTS * 2];
+    int span = qaws_find_span(local_knots, int(degree), int(num_cp), t);
+
+    int j;
+    for (j = 0; j < int(2u * (degree + 1u)); j++)
+        local_knots[j] = knots[span - int(degree) + j];
+
+    for (j = 0; j <= int(degree); j++) {
+        uint cp_idx = uint(span - int(degree) + j) * 2u;
+        local_cp[j * 2 + 0] = control_points[cp_idx + 0u];
+        local_cp[j * 2 + 1] = control_points[cp_idx + 1u];
+    }
+
+    qaws_eval_2d result = qaws_bspline_eval_2d(
+        local_cp, local_knots, int(degree), int(degree), t, 1);
+
+    results[idx * 2u]      = result.position.x;
+    results[idx * 2u + 1u] = result.position.y;
+}

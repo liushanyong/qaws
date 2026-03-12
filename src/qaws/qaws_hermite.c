@@ -1,11 +1,14 @@
 #include "qaws_hermite.h"
 #include "qaws_curve.h"
+#include "qaws_prepare.h"
 #include "internal/qaws_internal_types.h"
 #include "internal/qaws_internal_curve.h"
 #include "internal/qaws_internal_basis.h"
 #include "internal/qaws_internal_validation.h"
+#include "core/qaws_cubic_poly_core.h"
 #include <stdlib.h>
 #include <string.h>
+#include "qaws_platform.h"
 
 /* -------------------------------------------------------------------------- */
 /*  Vtable functions                                                          */
@@ -20,13 +23,12 @@ static qaws_status hermite_eval_span_2d(
 {
 	qaws_hermite_impl const *impl = (qaws_hermite_impl const *)curve->impl;
 	unsigned int const dim_count = 2;
-	qaws_scalar t = local_t;
-	qaws_scalar t2 = t * t;
-	qaws_scalar t3 = t2 * t;
 	qaws_scalar const *cx;
 	qaws_scalar const *cy;
 	qaws_scalar ax, bx, cx_coeff, dx_val;
 	qaws_scalar ay, by, cy_coeff, dy_val;
+	qaws_vec2 va, vb, vc, vd;
+	qaws_eval_2d core;
 
 	memset(out_result, 0, sizeof(*out_result));
 
@@ -36,27 +38,31 @@ static qaws_status hermite_eval_span_2d(
 	ax = cx[0]; bx = cx[1]; cx_coeff = cx[2]; dx_val = cx[3];
 	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
 
+	va.x = ax; va.y = ay;
+	vb.x = bx; vb.y = by;
+	vc.x = cx_coeff; vc.y = cy_coeff;
+	vd.x = dx_val; vd.y = dy_val;
+
+	core = qaws_cubic_eval_2d(va, vb, vc, vd, local_t, eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
-		out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
+		out_result->position = core.position;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D1) {
-		out_result->d1.x = (qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff;
-		out_result->d1.y = (qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff;
+		out_result->d1 = core.d1;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D2) {
-		out_result->d2.x = (qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx;
-		out_result->d2.y = (qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by;
+		out_result->d2 = core.d2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D3) {
-		out_result->d3.x = (qaws_scalar)6.0 * ax;
-		out_result->d3.y = (qaws_scalar)6.0 * ay;
+		out_result->d3.x = QAWS_LITERAL(6.0) * ax;
+		out_result->d3.y = QAWS_LITERAL(6.0) * ay;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -72,15 +78,14 @@ static qaws_status hermite_eval_span_3d(
 {
 	qaws_hermite_impl const *impl = (qaws_hermite_impl const *)curve->impl;
 	unsigned int const dim_count = 3;
-	qaws_scalar t = local_t;
-	qaws_scalar t2 = t * t;
-	qaws_scalar t3 = t2 * t;
 	qaws_scalar const *cx;
 	qaws_scalar const *cy;
 	qaws_scalar const *cz;
 	qaws_scalar ax, bx, cx_coeff, dx_val;
 	qaws_scalar ay, by, cy_coeff, dy_val;
 	qaws_scalar az, bz, cz_coeff, dz_val;
+	qaws_vec3 va, vb, vc, vd;
+	qaws_eval_3d core;
 
 	memset(out_result, 0, sizeof(*out_result));
 
@@ -92,31 +97,32 @@ static qaws_status hermite_eval_span_3d(
 	ay = cy[0]; by = cy[1]; cy_coeff = cy[2]; dy_val = cy[3];
 	az = cz[0]; bz = cz[1]; cz_coeff = cz[2]; dz_val = cz[3];
 
+	va.x = ax; va.y = ay; va.z = az;
+	vb.x = bx; vb.y = by; vb.z = bz;
+	vc.x = cx_coeff; vc.y = cy_coeff; vc.z = cz_coeff;
+	vd.x = dx_val; vd.y = dy_val; vd.z = dz_val;
+
+	core = qaws_cubic_eval_3d(va, vb, vc, vd, local_t, eval_flags);
+
 	if (eval_flags & QAWS_EVAL_FLAG_POSITION) {
-		out_result->position.x = ax * t3 + bx * t2 + cx_coeff * t + dx_val;
-		out_result->position.y = ay * t3 + by * t2 + cy_coeff * t + dy_val;
-		out_result->position.z = az * t3 + bz * t2 + cz_coeff * t + dz_val;
+		out_result->position = core.position;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_POSITION;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D1) {
-		out_result->d1.x = (qaws_scalar)3.0 * ax * t2 + (qaws_scalar)2.0 * bx * t + cx_coeff;
-		out_result->d1.y = (qaws_scalar)3.0 * ay * t2 + (qaws_scalar)2.0 * by * t + cy_coeff;
-		out_result->d1.z = (qaws_scalar)3.0 * az * t2 + (qaws_scalar)2.0 * bz * t + cz_coeff;
+		out_result->d1 = core.d1;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D1;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D2) {
-		out_result->d2.x = (qaws_scalar)6.0 * ax * t + (qaws_scalar)2.0 * bx;
-		out_result->d2.y = (qaws_scalar)6.0 * ay * t + (qaws_scalar)2.0 * by;
-		out_result->d2.z = (qaws_scalar)6.0 * az * t + (qaws_scalar)2.0 * bz;
+		out_result->d2 = core.d2;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D2;
 	}
 
 	if (eval_flags & QAWS_EVAL_FLAG_D3) {
-		out_result->d3.x = (qaws_scalar)6.0 * ax;
-		out_result->d3.y = (qaws_scalar)6.0 * ay;
-		out_result->d3.z = (qaws_scalar)6.0 * az;
+		out_result->d3.x = QAWS_LITERAL(6.0) * ax;
+		out_result->d3.y = QAWS_LITERAL(6.0) * ay;
+		out_result->d3.z = QAWS_LITERAL(6.0) * az;
 		out_result->valid_flags |= QAWS_EVAL_FLAG_D3;
 	}
 
@@ -214,7 +220,7 @@ qaws_status qaws_curve_create_hermite_ex(
 	dim_count = (desc->dimension == QAWS_DIMENSION_2D) ? 2u : 3u;
 	span_count = desc->point_count - 1;
 
-	range.min_value = (qaws_scalar)0;
+	range.min_value = QAWS_ZERO;
 	range.max_value = (qaws_scalar)span_count;
 
 	curve = qaws_internal_curve_alloc_ex(
@@ -259,9 +265,9 @@ qaws_status qaws_curve_create_hermite_ex(
 
 	impl->point_count = desc->point_count;
 
-	/* Precompute per-span polynomial coefficients: a*t^3 + b*t^2 + c*t + d */
+	/* Precompute per-span polynomial coefficients via prepare functions */
 	{
-		unsigned int s, d;
+		unsigned int s;
 		impl->span_coeffs = (qaws_scalar *)qaws_internal_alloc(allocator,
 			(unsigned long)(sizeof(qaws_scalar) * (size_t)span_count * (size_t)dim_count * 4));
 		if (!impl->span_coeffs) {
@@ -271,21 +277,77 @@ qaws_status qaws_curve_create_hermite_ex(
 			qaws_internal_curve_free(curve);
 			return QAWS_STATUS_ALLOCATION_FAILURE;
 		}
-		for (s = 0; s < span_count; s++) {
-			qaws_scalar const *p0 = impl->points + s * dim_count;
-			qaws_scalar const *p1 = impl->points + (s + 1) * dim_count;
-			qaws_scalar const *m0 = impl->tangents + s * dim_count;
-			qaws_scalar const *m1 = impl->tangents + (s + 1) * dim_count;
-			for (d = 0; d < dim_count; d++) {
-				qaws_scalar a_coeff = (qaws_scalar)2.0 * p0[d] + m0[d] - (qaws_scalar)2.0 * p1[d] + m1[d];
-				qaws_scalar b_coeff = (qaws_scalar)-3.0 * p0[d] - (qaws_scalar)2.0 * m0[d] + (qaws_scalar)3.0 * p1[d] - m1[d];
-				qaws_scalar c_coeff = m0[d];
-				qaws_scalar d_coeff = p0[d];
-				impl->span_coeffs[(s * dim_count + d) * 4 + 0] = a_coeff;
-				impl->span_coeffs[(s * dim_count + d) * 4 + 1] = b_coeff;
-				impl->span_coeffs[(s * dim_count + d) * 4 + 2] = c_coeff;
-				impl->span_coeffs[(s * dim_count + d) * 4 + 3] = d_coeff;
+
+		if (dim_count == 2) {
+			qaws_vec2 *tmp_a, *tmp_b, *tmp_c, *tmp_d;
+			size_t vec_size = (size_t)span_count * sizeof(qaws_vec2);
+			tmp_a = (qaws_vec2 *)qaws_internal_alloc(allocator, (unsigned long)(vec_size * 4));
+			if (!tmp_a) {
+				qaws_internal_dealloc(allocator, impl->span_coeffs);
+				qaws_internal_dealloc(allocator, impl->tangents);
+				qaws_internal_dealloc(allocator, impl->points);
+				qaws_internal_dealloc(allocator, impl);
+				qaws_internal_curve_free(curve);
+				return QAWS_STATUS_ALLOCATION_FAILURE;
 			}
+			tmp_b = tmp_a + span_count;
+			tmp_c = tmp_b + span_count;
+			tmp_d = tmp_c + span_count;
+
+			qaws_hermite_prepare_2d(
+				(const qaws_vec2 *)impl->points,
+				(const qaws_vec2 *)impl->tangents,
+				desc->point_count,
+				tmp_a, tmp_b, tmp_c, tmp_d);
+
+			for (s = 0; s < span_count; s++) {
+				impl->span_coeffs[s * 8 + 0] = tmp_a[s].x;
+				impl->span_coeffs[s * 8 + 1] = tmp_b[s].x;
+				impl->span_coeffs[s * 8 + 2] = tmp_c[s].x;
+				impl->span_coeffs[s * 8 + 3] = tmp_d[s].x;
+				impl->span_coeffs[s * 8 + 4] = tmp_a[s].y;
+				impl->span_coeffs[s * 8 + 5] = tmp_b[s].y;
+				impl->span_coeffs[s * 8 + 6] = tmp_c[s].y;
+				impl->span_coeffs[s * 8 + 7] = tmp_d[s].y;
+			}
+			qaws_internal_dealloc(allocator, tmp_a);
+		} else {
+			qaws_vec3 *tmp_a, *tmp_b, *tmp_c, *tmp_d;
+			size_t vec_size = (size_t)span_count * sizeof(qaws_vec3);
+			tmp_a = (qaws_vec3 *)qaws_internal_alloc(allocator, (unsigned long)(vec_size * 4));
+			if (!tmp_a) {
+				qaws_internal_dealloc(allocator, impl->span_coeffs);
+				qaws_internal_dealloc(allocator, impl->tangents);
+				qaws_internal_dealloc(allocator, impl->points);
+				qaws_internal_dealloc(allocator, impl);
+				qaws_internal_curve_free(curve);
+				return QAWS_STATUS_ALLOCATION_FAILURE;
+			}
+			tmp_b = tmp_a + span_count;
+			tmp_c = tmp_b + span_count;
+			tmp_d = tmp_c + span_count;
+
+			qaws_hermite_prepare_3d(
+				(const qaws_vec3 *)impl->points,
+				(const qaws_vec3 *)impl->tangents,
+				desc->point_count,
+				tmp_a, tmp_b, tmp_c, tmp_d);
+
+			for (s = 0; s < span_count; s++) {
+				impl->span_coeffs[s * 12 + 0]  = tmp_a[s].x;
+				impl->span_coeffs[s * 12 + 1]  = tmp_b[s].x;
+				impl->span_coeffs[s * 12 + 2]  = tmp_c[s].x;
+				impl->span_coeffs[s * 12 + 3]  = tmp_d[s].x;
+				impl->span_coeffs[s * 12 + 4]  = tmp_a[s].y;
+				impl->span_coeffs[s * 12 + 5]  = tmp_b[s].y;
+				impl->span_coeffs[s * 12 + 6]  = tmp_c[s].y;
+				impl->span_coeffs[s * 12 + 7]  = tmp_d[s].y;
+				impl->span_coeffs[s * 12 + 8]  = tmp_a[s].z;
+				impl->span_coeffs[s * 12 + 9]  = tmp_b[s].z;
+				impl->span_coeffs[s * 12 + 10] = tmp_c[s].z;
+				impl->span_coeffs[s * 12 + 11] = tmp_d[s].z;
+			}
+			qaws_internal_dealloc(allocator, tmp_a);
 		}
 	}
 

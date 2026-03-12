@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "qaws_platform.h"
 
 typedef struct qaws_surface_swept_impl
 {
@@ -21,8 +22,8 @@ static void compute_normal(qaws_vec3 du, qaws_vec3 dv, qaws_vec3* out)
 	qaws_scalar nx = du.y * dv.z - du.z * dv.y;
 	qaws_scalar ny = du.z * dv.x - du.x * dv.z;
 	qaws_scalar nz = du.x * dv.y - du.y * dv.x;
-	qaws_scalar len = (qaws_scalar)sqrt((double)(nx * nx + ny * ny + nz * nz));
-	if (len > (qaws_scalar)1e-12)
+	qaws_scalar len = QAWS_SQRT(nx * nx + ny * ny + nz * nz);
+	if (len > QAWS_LITERAL(1e-12))
 	{
 		out->x = nx / len; out->y = ny / len; out->z = nz / len;
 	}
@@ -128,13 +129,13 @@ static qaws_status swept_surface_eval(
 	if (eval_flags & (QAWS_SURFACE_EVAL_DU | QAWS_SURFACE_EVAL_DUU
 		| QAWS_SURFACE_EVAL_DUV | QAWS_SURFACE_EVAL_NORMAL))
 	{
-		qaws_scalar h = (qaws_scalar)1e-5;
+		qaws_scalar h = QAWS_LITERAL(1e-5);
 		qaws_scalar u_lo = u - h, u_hi = u + h;
 		qaws_vec3 p_lo, p_hi;
 
 		if (u_lo < 0) u_lo = 0;
 		if (u_hi > 1) u_hi = 1;
-		h = (u_hi - u_lo) * (qaws_scalar)0.5;
+		h = (u_hi - u_lo) * QAWS_LITERAL(0.5);
 
 		/* Evaluate position at u-h and u+h */
 		{
@@ -160,7 +161,7 @@ static qaws_status swept_surface_eval(
 
 		if (eval_flags & QAWS_SURFACE_EVAL_DU)
 		{
-			qaws_scalar inv2h = (qaws_scalar)1 / ((qaws_scalar)2 * h);
+			qaws_scalar inv2h = QAWS_ONE / (QAWS_LITERAL(2.0) * h);
 			out_result->du.x = (p_hi.x - p_lo.x) * inv2h;
 			out_result->du.y = (p_hi.y - p_lo.y) * inv2h;
 			out_result->du.z = (p_hi.z - p_lo.z) * inv2h;
@@ -170,7 +171,7 @@ static qaws_status swept_surface_eval(
 		/* duu via central 2nd-order finite difference: (p_hi - 2*p + p_lo) / h^2 */
 		if (eval_flags & QAWS_SURFACE_EVAL_DUU)
 		{
-			qaws_scalar inv_h2 = (qaws_scalar)1 / (h * h);
+			qaws_scalar inv_h2 = QAWS_ONE / (h * h);
 			out_result->duu.x = (p_hi.x - 2 * pos.x + p_lo.x) * inv_h2;
 			out_result->duu.y = (p_hi.y - 2 * pos.y + p_lo.y) * inv_h2;
 			out_result->duu.z = (p_hi.z - 2 * pos.z + p_lo.z) * inv_h2;
@@ -186,7 +187,7 @@ static qaws_status swept_surface_eval(
 			qaws_scalar dpx = prof_r.d1.x * scale * s_prof;
 			qaws_scalar dpy = prof_r.d1.y * scale * s_prof;
 			qaws_vec3 dv_lo, dv_hi;
-			qaws_scalar inv2h = (qaws_scalar)1 / ((qaws_scalar)2 * h);
+			qaws_scalar inv2h = QAWS_ONE / (QAWS_LITERAL(2.0) * h);
 
 			qaws_curve_compute_frenet_frame_3d(impl->path, t_lo, &T_tmp, &N_lo, &B_lo);
 			qaws_curve_compute_frenet_frame_3d(impl->path, t_hi, &T_tmp, &N_hi, &B_hi);
@@ -266,7 +267,7 @@ qaws_status qaws_surface_create_swept(
 
 	impl->path = desc->path;
 	impl->profile = desc->profile;
-	impl->scale = (desc->scale > 0) ? desc->scale : (qaws_scalar)1;
+	impl->scale = (desc->scale > 0) ? desc->scale : QAWS_ONE;
 	impl->path_range = qaws_curve_get_parameter_range(desc->path);
 	impl->prof_range = qaws_curve_get_parameter_range(desc->profile);
 

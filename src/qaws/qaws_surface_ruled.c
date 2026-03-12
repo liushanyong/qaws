@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "qaws_platform.h"
 
 typedef struct qaws_surface_ruled_impl
 {
@@ -20,8 +21,8 @@ static void compute_normal(qaws_vec3 du, qaws_vec3 dv, qaws_vec3* out)
 	qaws_scalar nx = du.y * dv.z - du.z * dv.y;
 	qaws_scalar ny = du.z * dv.x - du.x * dv.z;
 	qaws_scalar nz = du.x * dv.y - du.y * dv.x;
-	qaws_scalar len = (qaws_scalar)sqrt((double)(nx * nx + ny * ny + nz * nz));
-	if (len > (qaws_scalar)1e-12)
+	qaws_scalar len = QAWS_SQRT(nx * nx + ny * ny + nz * nz);
+	if (len > QAWS_LITERAL(1e-12))
 	{
 		out->x = nx / len; out->y = ny / len; out->z = nz / len;
 	}
@@ -47,7 +48,7 @@ static qaws_status ruled_surface_eval(
 {
 	qaws_surface_ruled_impl const* impl =
 		(qaws_surface_ruled_impl const*)surface->impl;
-	qaws_scalar one_minus_v = (qaws_scalar)1 - v;
+	qaws_scalar one_minus_v = QAWS_ONE - v;
 	qaws_scalar s_a = impl->range_a.max_value - impl->range_a.min_value;
 	qaws_scalar s_b = impl->range_b.max_value - impl->range_b.min_value;
 	qaws_scalar u_a = impl->range_a.min_value + u * s_a;

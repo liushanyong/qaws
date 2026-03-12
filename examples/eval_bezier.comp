@@ -1,0 +1,32 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../src/qaws/qaws_glsl.h"
+#include "../src/qaws/core/qaws_decasteljau_core.h"
+
+layout(std430, binding = 0) readonly buffer CPBuffer { float cp[]; };
+layout(std430, binding = 1) buffer OutBuffer { float results[]; };
+
+layout(push_constant) uniform Params {
+    uint sample_count;
+};
+
+layout(local_size_x = 256) in;
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= sample_count)
+        return;
+
+    float t = float(idx) / float(sample_count - 1u);
+
+    qaws_vec2 p0 = qaws_vec2(cp[0], cp[1]);
+    qaws_vec2 p1 = qaws_vec2(cp[2], cp[3]);
+    qaws_vec2 p2 = qaws_vec2(cp[4], cp[5]);
+    qaws_vec2 p3 = qaws_vec2(cp[6], cp[7]);
+
+    qaws_vec2 pos = qaws_bezier3_eval_2d(p0, p1, p2, p3, t);
+
+    results[idx * 2u]      = pos.x;
+    results[idx * 2u + 1u] = pos.y;
+}
