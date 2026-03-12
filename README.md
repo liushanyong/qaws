@@ -1,5 +1,11 @@
 # Qaws
 
+| Platform | f32 | f64 |
+|---|---|---|
+| **Linux** | [![Linux f32](https://github.com/soufianekhiat/qaws/actions/workflows/linux-f32.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/linux-f32.yml) | [![Linux f64](https://github.com/soufianekhiat/qaws/actions/workflows/linux-f64.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/linux-f64.yml) |
+| **macOS** | [![macOS f32](https://github.com/soufianekhiat/qaws/actions/workflows/macos-f32.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/macos-f32.yml) | [![macOS f64](https://github.com/soufianekhiat/qaws/actions/workflows/macos-f64.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/macos-f64.yml) |
+| **Windows** | [![Windows f32](https://github.com/soufianekhiat/qaws/actions/workflows/windows-f32.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/windows-f32.yml) | [![Windows f64](https://github.com/soufianekhiat/qaws/actions/workflows/windows-f64.yml/badge.svg?branch=main)](https://github.com/soufianekhiat/qaws/actions/workflows/windows-f64.yml) |
+
 **Qaws** (قوس) — Arabic for *arc*, *bow*, *curve*. A dependency-free C11
 library for creating, evaluating, sampling, traversing, and inspecting
 parametric curves and surfaces in 2D and 3D.

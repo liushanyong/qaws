@@ -80,3 +80,4 @@ buildsystem/sharpmake/*.exe
 buildsystem/sharpmake/*.dll
 buildsystem/sharpmake/*.json
 *.in
+!buildsystem/cmake/*.in

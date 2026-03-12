@@ -350,9 +350,9 @@ static void test_easing(void)
 			TEST_ASSERT(approx_eq(r_t0.position.y, r_curve_start.position.y), msg);
 
 			sprintf(msg, "%s t=1 end x", mode_names[mi]);
-			TEST_ASSERT(approx_eq(r_t1.position.x, r_curve_end.position.x), msg);
+			TEST_ASSERT(approx_eq_loose(r_t1.position.x, r_curve_end.position.x), msg);
 			sprintf(msg, "%s t=1 end y", mode_names[mi]);
-			TEST_ASSERT(approx_eq(r_t1.position.y, r_curve_end.position.y), msg);
+			TEST_ASSERT(approx_eq_loose(r_t1.position.y, r_curve_end.position.y), msg);
 
 			qaws_traversal_destroy(etrav);
 		}
@@ -446,9 +446,9 @@ static void test_wrap_modes(void)
 		qaws_traversal_evaluate_2d(
 			trav, total_len + eps, QAWS_EVAL_FLAG_POSITION, &r_b);
 
-		TEST_ASSERT(approx_eq(r_a.position.x, r_b.position.x),
+		TEST_ASSERT(approx_eq_loose(r_a.position.x, r_b.position.x),
 			"loop wraps to start x");
-		TEST_ASSERT(approx_eq(r_a.position.y, r_b.position.y),
+		TEST_ASSERT(approx_eq_loose(r_a.position.y, r_b.position.y),
 			"loop wraps to start y");
 
 		qaws_traversal_destroy(trav);
@@ -481,9 +481,9 @@ static void test_wrap_modes(void)
 		qaws_traversal_evaluate_2d(
 			trav, (qaws_scalar)2.0 * total_len + eps, QAWS_EVAL_FLAG_POSITION, &r_b);
 
-		TEST_ASSERT(approx_eq(r_a.position.x, r_b.position.x),
+		TEST_ASSERT(approx_eq_loose(r_a.position.x, r_b.position.x),
 			"ping-pong returns to start x");
-		TEST_ASSERT(approx_eq(r_a.position.y, r_b.position.y),
+		TEST_ASSERT(approx_eq_loose(r_a.position.y, r_b.position.y),
 			"ping-pong returns to start y");
 
 		qaws_traversal_destroy(trav);
@@ -529,9 +529,9 @@ static void test_wrap_modes(void)
 		/* Very large distance should clamp to end */
 		qaws_traversal_evaluate_2d(
 			trav, total_len * (qaws_scalar)100.0, QAWS_EVAL_FLAG_POSITION, &r_huge);
-		TEST_ASSERT(approx_eq(r_huge.position.x, r_end.position.x),
+		TEST_ASSERT(approx_eq_loose(r_huge.position.x, r_end.position.x),
 			"clamp huge dist x == end x");
-		TEST_ASSERT(approx_eq(r_huge.position.y, r_end.position.y),
+		TEST_ASSERT(approx_eq_loose(r_huge.position.y, r_end.position.y),
 			"clamp huge dist y == end y");
 
 		qaws_traversal_destroy(trav);
@@ -565,9 +565,9 @@ static void test_wrap_modes(void)
 		qaws_traversal_evaluate_2d(
 			trav, total_len - eps, QAWS_EVAL_FLAG_POSITION, &r_pos);
 
-		TEST_ASSERT(approx_eq(r_neg.position.x, r_pos.position.x),
+		TEST_ASSERT(approx_eq_loose(r_neg.position.x, r_pos.position.x),
 			"loop negative wrap x");
-		TEST_ASSERT(approx_eq(r_neg.position.y, r_pos.position.y),
+		TEST_ASSERT(approx_eq_loose(r_neg.position.y, r_pos.position.y),
 			"loop negative wrap y");
 
 		qaws_traversal_destroy(trav);

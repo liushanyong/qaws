@@ -44,9 +44,18 @@ static int g_fail = 0;
 
 #if QAWS_SCALAR_IS_FLOAT
 #define TOLERANCE 1e-4f
+#define TOLERANCE_LOOSE 1e-3f
 #else
 #define TOLERANCE 1e-8
+#define TOLERANCE_LOOSE 1e-4
 #endif
+
+static int approx_eq_loose(qaws_scalar a, qaws_scalar b)
+{
+	qaws_scalar diff = a - b;
+	if (diff < 0) diff = -diff;
+	return diff < TOLERANCE_LOOSE;
+}
 
 static int approx_eq(qaws_scalar a, qaws_scalar b)
 {

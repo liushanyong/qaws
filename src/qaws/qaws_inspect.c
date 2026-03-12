@@ -1644,9 +1644,11 @@ qaws_status qaws_curve_compute_winding_number_2d(
 #if QAWS_SCALAR_IS_FLOAT
 #define ISECT_POS_TOLERANCE  ((qaws_scalar)1.0e-3f)
 #define ISECT_CONVERGE_TOL   ((qaws_scalar)1.0e-5f)
+#define ISECT_CANDIDATE_TOL  ((qaws_scalar)1.0e-3f)
 #else
 #define ISECT_POS_TOLERANCE  ((qaws_scalar)1.0e-6)
 #define ISECT_CONVERGE_TOL   ((qaws_scalar)1.0e-10)
+#define ISECT_CANDIDATE_TOL  ((qaws_scalar)1.0e-3)
 #endif
 
 /* Deduplication helper: checks both parameter proximity and position proximity */
@@ -1928,7 +1930,7 @@ qaws_status qaws_curve_find_self_intersections_2d(
 
 				/* Coarse distance threshold: ~2x the sampling chord length */
 				dist2 = dx * dx + dy * dy;
-				if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+				if (dist2 > ISECT_CANDIDATE_TOL * ISECT_CANDIDATE_TOL * (qaws_scalar)10000.0)
 					continue;
 
 				/* Newton refinement */
@@ -2029,7 +2031,7 @@ qaws_status qaws_curve_find_self_intersections_3d(
 				qaws_scalar dist2;
 
 				dist2 = dx * dx + dy * dy + dz * dz;
-				if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+				if (dist2 > ISECT_CANDIDATE_TOL * ISECT_CANDIDATE_TOL * (qaws_scalar)10000.0)
 					continue;
 
 				{
@@ -2142,7 +2144,7 @@ qaws_status qaws_curve_find_intersections_2d(
 			qaws_scalar dy = pts_a[i].y - pts_b[j].y;
 			qaws_scalar dist2 = dx * dx + dy * dy;
 
-			if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+			if (dist2 > ISECT_CANDIDATE_TOL * ISECT_CANDIDATE_TOL * (qaws_scalar)10000.0)
 				continue;
 
 			{
@@ -2247,7 +2249,7 @@ qaws_status qaws_curve_find_intersections_3d(
 			qaws_scalar dz = pts_a[i].z - pts_b[j].z;
 			qaws_scalar dist2 = dx * dx + dy * dy + dz * dz;
 
-			if (dist2 > ISECT_POS_TOLERANCE * ISECT_POS_TOLERANCE * (qaws_scalar)10000.0)
+			if (dist2 > ISECT_CANDIDATE_TOL * ISECT_CANDIDATE_TOL * (qaws_scalar)10000.0)
 				continue;
 
 			{
