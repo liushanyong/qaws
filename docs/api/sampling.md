@@ -83,3 +83,129 @@ qaws_status qaws_curve_sample_eval_3d(
 ```
 
 Same as `sample_eval_2d` but for 3D curves.
+
+---
+
+## qaws_curve_sample_curvature_weighted_2d
+
+```c
+qaws_status qaws_curve_sample_curvature_weighted_2d(
+    qaws_curve const* curve,
+    unsigned int sample_count,
+    qaws_vec2* out_positions,
+    unsigned int position_capacity,
+    unsigned int* out_position_count);
+```
+
+Distributes samples proportionally to curvature magnitude so high-curvature regions receive more points.
+
+**Parameters:**
+- `curve` -- The curve. Must be 2D.
+- `sample_count` -- Desired number of samples.
+- `out_positions` -- Buffer to receive sampled points.
+- `position_capacity` -- Size of the buffer.
+- `out_position_count` -- Receives the number of points written.
+
+---
+
+## qaws_curve_sample_curvature_weighted_3d
+
+```c
+qaws_status qaws_curve_sample_curvature_weighted_3d(
+    qaws_curve const* curve,
+    unsigned int sample_count,
+    qaws_vec3* out_positions,
+    unsigned int position_capacity,
+    unsigned int* out_position_count);
+```
+
+Same as `curvature_weighted_2d` but for 3D curves.
+
+---
+
+## qaws_curve_sample_feature_preserving_2d
+
+```c
+qaws_status qaws_curve_sample_feature_preserving_2d(
+    qaws_curve const* curve,
+    unsigned int base_sample_count,
+    qaws_vec2* out_positions,
+    unsigned int position_capacity,
+    unsigned int* out_position_count);
+```
+
+Inserts inflection points and extrema into a uniform parameter sample set so that important geometric features are never missed.
+
+**Parameters:**
+- `curve` -- The curve. Must be 2D.
+- `base_sample_count` -- Number of uniform base samples before feature insertion.
+- `out_positions` -- Buffer to receive sampled points.
+- `position_capacity` -- Size of the buffer (should be larger than `base_sample_count` to accommodate inserted features).
+- `out_position_count` -- Receives the actual number of points written.
+
+---
+
+## qaws_curve_sample_feature_preserving_3d
+
+```c
+qaws_status qaws_curve_sample_feature_preserving_3d(
+    qaws_curve const* curve,
+    unsigned int base_sample_count,
+    qaws_vec3* out_positions,
+    unsigned int position_capacity,
+    unsigned int* out_position_count);
+```
+
+Same as `feature_preserving_2d` but for 3D curves.
+
+---
+
+## Streaming / callback-based sampling
+
+### qaws_sample_callback_2d / 3d
+
+```c
+typedef int (*qaws_sample_callback_2d)(
+    qaws_scalar parameter,
+    qaws_vec2 const* position,
+    void* user_data);
+
+typedef int (*qaws_sample_callback_3d)(
+    qaws_scalar parameter,
+    qaws_vec3 const* position,
+    void* user_data);
+```
+
+Callback function types for streaming sampling. Return non-zero to continue, or 0 to stop early (not an error).
+
+### qaws_curve_sample_streaming_2d
+
+```c
+qaws_status qaws_curve_sample_streaming_2d(
+    qaws_curve const* curve,
+    qaws_sampling_desc const* desc,
+    qaws_sample_callback_2d callback,
+    void* user_data);
+```
+
+Samples a 2D curve and delivers each point through a callback instead of writing to a buffer. Useful for processing points one at a time without pre-allocating storage.
+
+**Parameters:**
+- `curve` -- The curve. Must be 2D.
+- `desc` -- Sampling configuration.
+- `callback` -- Called for each sample point. Return 0 to stop early.
+- `user_data` -- Opaque pointer passed through to the callback.
+
+---
+
+### qaws_curve_sample_streaming_3d
+
+```c
+qaws_status qaws_curve_sample_streaming_3d(
+    qaws_curve const* curve,
+    qaws_sampling_desc const* desc,
+    qaws_sample_callback_3d callback,
+    void* user_data);
+```
+
+Same as `streaming_2d` but for 3D curves.

@@ -21,7 +21,11 @@ cmake --build .
 | `QAWS_ENABLE_WARNINGS` | `ON` | Enable compiler warnings |
 | `QAWS_WARNINGS_AS_ERRORS` | `ON` (f64) / `OFF` (f32) | Treat warnings as errors |
 | `QAWS_DISABLE_STRICT_ALIASING` | `ON` | Pass `-fno-strict-aliasing` on GCC/Clang |
+| `QAWS_ENABLE_SIMD` | `OFF` | Enable SIMD batch evaluation. Auto-detects the best available ISA at configure time (AVX2, SSE2, or NEON). When enabled, the `batch/` source files are compiled into the library. |
+| `QAWS_DEBUG_POSTFIX` | `"d"` | String appended to the library name in Debug builds (e.g. `qawsd`). Set to `""` to disable. |
+| `QAWS_DEBUG_PREFIX` | `""` | String prepended to the library name in Debug builds (e.g. `dbg_qaws`). |
 | `QAWS_INSTALL` | `ON` | Enable install rules |
+| `QAWS_INSTALL_PKGCONFIG` | `ON` | Install the `qaws.pc` pkg-config file |
 | `BUILD_TESTING` | `ON` | Build test suite |
 
 ### f32 vs f64 build
@@ -33,6 +37,18 @@ cmake .. -DQAWS_SCALAR_IS_FLOAT=ON
 # Double
 cmake .. -DQAWS_SCALAR_IS_FLOAT=OFF
 ```
+
+### SIMD build
+
+```bash
+cmake .. -DQAWS_ENABLE_SIMD=ON
+```
+
+When `QAWS_ENABLE_SIMD` is `ON`, CMake probes the compiler for AVX2, SSE2, and
+NEON support (in that order) and enables the first one it finds. The
+corresponding define (`QAWS_SIMD_AVX2`, `QAWS_SIMD_SSE2`, or `QAWS_SIMD_NEON`)
+is set automatically and the appropriate compiler flags are added (e.g.
+`/arch:AVX2` on MSVC, `-mavx2 -mfma` on GCC/Clang).
 
 ### Running tests
 
@@ -55,9 +71,11 @@ cmake --install . --prefix /usr/local
 
 Installs:
 - Library: `lib/libqaws.a` (or `.so` / `.dll`)
-- Headers: `include/qaws*.h`
+- Public headers: `include/qaws*.h` (all public API headers)
+- Core algorithm headers: `include/core/qaws_*_core.h` (backend-agnostic evaluation kernels)
+- Bootstrap headers: `include/qaws_hlsl.h`, `include/qaws_glsl.h`, `include/qaws_halide.h`
 - CMake config: `lib/cmake/Qaws/`
-- pkg-config: `lib/pkgconfig/qaws.pc`
+- pkg-config: `lib/pkgconfig/qaws.pc` (when `QAWS_INSTALL_PKGCONFIG` is `ON`)
 
 ### Using from another CMake project
 
@@ -65,6 +83,16 @@ Installs:
 find_package(Qaws REQUIRED)
 target_link_libraries(myapp PRIVATE Qaws::qaws)
 ```
+
+## Multi-backend note
+
+Qaws is a multi-backend library. The C build (CMake or Sharpmake) produces the
+runtime library used by C/C++ callers. The evaluation algorithms live in
+backend-agnostic `core/*.h` headers that contain pure arithmetic with no
+platform dependencies. HLSL, GLSL, and Halide users do **not** link the C
+library -- they include the corresponding bootstrap header (`qaws_hlsl.h`,
+`qaws_glsl.h`, or `qaws_halide.h`) which pulls in the core headers directly.
+The backend is therefore selected at include time, not at build time.
 
 ## Sharpmake (Visual Studio)
 
@@ -90,6 +118,22 @@ This will:
 ### Opening the solution
 
 After bootstrap, open `Qaws_vs2022_win64.sln` in the repo root.
+
+### Configuration names
+
+Sharpmake generates configurations for every combination of `Optimization`,
+`ScalarType` (Float / Double), and `SimdMode` (On / Off). The resulting
+configuration names follow the pattern:
+
+```
+{Optimization}_{scalar}[_simd]
+```
+
+For example: `Debug_f32`, `Release_f64`, `Debug_f32_simd`, `Release_f64_simd`.
+
+When `SimdMode` is `On`, the build defines `QAWS_SIMD_AVX2=1`, adds `/arch:AVX2`,
+and compiles the `batch/` source files. When `SimdMode` is `Off`, the `batch/`
+sources are excluded via a build regex filter.
 
 ### Regenerating projects
 

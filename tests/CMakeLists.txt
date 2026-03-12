@@ -1,7 +1,37 @@
 add_executable(
   qaws_tests
   test_runner.c
-  # Test sources will be added here as they are implemented.
+  00_status.c
+  01_bezier.c
+  02_hermite.c
+  03_catmull_rom.c
+  04_bspline.c
+  05_nurbs.c
+  06_trajectory.c
+  07_yuksel.c
+  08_rational_bezier.c
+  09_arc.c
+  10_polynomial.c
+  11_clothoid.c
+  12_subdivision.c
+  13_composite.c
+  14_evaluation.c
+  15_sampling.c
+  16_traversal.c
+  17_inspection.c
+  18_operations.c
+  19_conversion.c
+  20_intersection.c
+  21_export_import.c
+  22_surfaces.c
+  23_performance.c
+  24_error_handling.c
+  25_svg_curves.c
+  26_svg_operations.c
+  27_svg_analysis.c
+  28_svg_families.c
+  29_obj_curves.c
+  30_obj_surfaces.c
 )
 
 target_link_libraries(qaws_tests PRIVATE Qaws::qaws)

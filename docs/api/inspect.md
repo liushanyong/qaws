@@ -203,6 +203,181 @@ Computes the parametric speed `|d1|` (magnitude of the first derivative). Works 
 
 ---
 
+## Frenet frame
+
+### qaws_curve_compute_normal_2d
+
+```c
+qaws_status qaws_curve_compute_normal_2d(
+    qaws_curve const* curve,
+    qaws_scalar parameter,
+    qaws_vec2* out_normal);
+```
+
+Computes the unit normal vector at the given parameter for a 2D curve. The normal is the tangent rotated 90 degrees counter-clockwise.
+
+### qaws_curve_compute_frenet_frame_3d
+
+```c
+qaws_status qaws_curve_compute_frenet_frame_3d(
+    qaws_curve const* curve,
+    qaws_scalar parameter,
+    qaws_vec3* out_tangent,
+    qaws_vec3* out_normal,
+    qaws_vec3* out_binormal);
+```
+
+Computes the Frenet frame (tangent, normal, binormal) at the given parameter for a 3D curve. Returns unit vectors forming an orthonormal basis.
+
+---
+
+## Inflection point detection
+
+### qaws_curve_find_inflection_points
+
+```c
+qaws_status qaws_curve_find_inflection_points(
+    qaws_curve const* curve,
+    qaws_scalar* out_parameters,
+    unsigned int parameter_capacity,
+    unsigned int* out_count);
+```
+
+Finds parameter values where the curvature changes sign (inflection points).
+
+**Parameters:**
+- `curve` -- The curve to analyze.
+- `out_parameters` -- Caller-allocated buffer for parameter values.
+- `parameter_capacity` -- Size of the buffer.
+- `out_count` -- Receives the number of inflection points found.
+
+---
+
+## Extrema detection
+
+### qaws_curve_find_extrema
+
+```c
+qaws_status qaws_curve_find_extrema(
+    qaws_curve const* curve,
+    unsigned int axis,
+    qaws_scalar* out_parameters,
+    unsigned int parameter_capacity,
+    unsigned int* out_count);
+```
+
+Finds parameter values where the curve reaches local extrema along a given axis.
+
+**Parameters:**
+- `curve` -- The curve to analyze.
+- `axis` -- Coordinate axis (0 = x, 1 = y, 2 = z).
+- `out_parameters` -- Caller-allocated buffer for parameter values.
+- `parameter_capacity` -- Size of the buffer.
+- `out_count` -- Receives the number of extrema found.
+
+---
+
+## Curvature comb
+
+### qaws_curve_compute_curvature_comb_2d
+
+```c
+qaws_status qaws_curve_compute_curvature_comb_2d(
+    qaws_curve const* curve,
+    unsigned int sample_count,
+    qaws_curvature_sample_2d* out_samples,
+    unsigned int sample_capacity);
+```
+
+Computes curvature comb data (position, curvature, normal) at uniformly-spaced samples along a 2D curve. Useful for visualizing curvature distribution.
+
+### qaws_curve_compute_curvature_comb_3d
+
+```c
+qaws_status qaws_curve_compute_curvature_comb_3d(
+    qaws_curve const* curve,
+    unsigned int sample_count,
+    qaws_curvature_sample_3d* out_samples,
+    unsigned int sample_capacity);
+```
+
+Same as `curvature_comb_2d` but for 3D curves.
+
+---
+
+## Winding number
+
+### qaws_curve_compute_winding_number_2d
+
+```c
+qaws_status qaws_curve_compute_winding_number_2d(
+    qaws_curve const* curve,
+    qaws_vec2 point,
+    int* out_winding_number);
+```
+
+Computes the winding number of a closed 2D curve around the given point. The winding number indicates how many times the curve wraps around the point (positive for counter-clockwise, negative for clockwise).
+
+---
+
+## Intersection detection
+
+### qaws_curve_find_intersections_2d
+
+```c
+qaws_status qaws_curve_find_intersections_2d(
+    qaws_curve const* curve_a,
+    qaws_curve const* curve_b,
+    qaws_intersection_2d* out_intersections,
+    unsigned int intersection_capacity,
+    unsigned int* out_count);
+```
+
+Finds all intersection points between two 2D curves. Results include parameter values on both curves and the intersection position.
+
+### qaws_curve_find_intersections_3d
+
+```c
+qaws_status qaws_curve_find_intersections_3d(
+    qaws_curve const* curve_a,
+    qaws_curve const* curve_b,
+    qaws_intersection_3d* out_intersections,
+    unsigned int intersection_capacity,
+    unsigned int* out_count);
+```
+
+Same as `find_intersections_2d` but for 3D curves.
+
+---
+
+## Self-intersection detection
+
+### qaws_curve_find_self_intersections_2d
+
+```c
+qaws_status qaws_curve_find_self_intersections_2d(
+    qaws_curve const* curve,
+    qaws_intersection_2d* out_intersections,
+    unsigned int intersection_capacity,
+    unsigned int* out_count);
+```
+
+Finds all points where a 2D curve crosses itself. `parameter_a` and `parameter_b` in each result are distinct parameter values on the same curve that map to the same position.
+
+### qaws_curve_find_self_intersections_3d
+
+```c
+qaws_status qaws_curve_find_self_intersections_3d(
+    qaws_curve const* curve,
+    qaws_intersection_3d* out_intersections,
+    unsigned int intersection_capacity,
+    unsigned int* out_count);
+```
+
+Same as `find_self_intersections_2d` but for 3D curves.
+
+---
+
 ## Family-specific inspection
 
 ### qaws_bezier_get_control_points

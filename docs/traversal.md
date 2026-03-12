@@ -87,6 +87,80 @@ qaws_traversal_destroy(trav);
 qaws_curve_destroy(curve);
 ```
 
+## Multi-curve traversal
+
+`qaws_traversal_create_multi` creates a traversal that spans multiple concatenated curves, treating them as a single continuous path. The input value (distance, time, or parameter) is mapped across the full concatenated domain.
+
+```c
+qaws_curve* curves[3] = { curve_a, curve_b, curve_c };
+
+qaws_traversal_desc desc = {
+    .traversal_mode = QAWS_TRAVERSAL_MODE_ARC_LENGTH,
+    .motion_profile = QAWS_MOTION_PROFILE_CONSTANT_SPEED,
+    .speed = 1.0f,
+    .clamp_to_domain = 1
+};
+
+qaws_traversal* trav = NULL;
+qaws_traversal_create_multi(curves, 3, &desc, &trav);
+
+// Evaluate at a distance that may span across curve boundaries
+qaws_eval_result_2d r;
+qaws_traversal_evaluate_2d(trav, 5.0f,
+    QAWS_EVAL_FLAG_POSITION, &r);
+```
+
+Signature:
+
+```c
+qaws_status qaws_traversal_create_multi(
+    qaws_curve const* const* curves,
+    unsigned int curve_count,
+    qaws_traversal_desc const* desc,
+    qaws_traversal** out_traversal);
+```
+
+None of the input curves are owned by the traversal; they must all remain alive for the traversal's lifetime.
+
+## Advance and reset
+
+For incremental time-stepping (e.g., game loops or animations), use `qaws_traversal_advance_2d`/`3d` to step forward by a delta time from the current internal position. Use `qaws_traversal_reset` to return to the start.
+
+These functions mutate the traversal's internal state and require external synchronization when used from multiple threads.
+
+```c
+qaws_traversal* trav = NULL;
+qaws_traversal_create(curve, &desc, &trav);
+
+// Game loop: advance by frame delta each tick
+qaws_eval_result_2d r;
+qaws_traversal_advance_2d(trav, 0.016f,
+    QAWS_EVAL_FLAG_POSITION, &r);
+// r.position is the new position after advancing 16ms
+
+// Reset to the beginning of the curve
+qaws_traversal_reset(trav);
+```
+
+Signatures:
+
+```c
+qaws_status qaws_traversal_advance_2d(
+    qaws_traversal* traversal,
+    qaws_scalar delta_time,
+    unsigned int eval_flags,
+    qaws_eval_result_2d* out_result);
+
+qaws_status qaws_traversal_advance_3d(
+    qaws_traversal* traversal,
+    qaws_scalar delta_time,
+    unsigned int eval_flags,
+    qaws_eval_result_3d* out_result);
+
+qaws_status qaws_traversal_reset(
+    qaws_traversal* traversal);
+```
+
 ## Example: constant-speed motion along a Bezier
 
 ```c

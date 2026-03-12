@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
   Qaws
-  VERSION 0.1.0
+  VERSION 1.0.0
   DESCRIPTION "Dependency-free C11 curve evaluation and traversal library"
   LANGUAGES C
 )

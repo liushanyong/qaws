@@ -1,6 +1,6 @@
 # Curve Families
 
-Qaws supports seven curve families. Each is created through a descriptor struct and a `qaws_curve_create_*` function. After creation, all families share the same evaluation, sampling, traversal, and inspection APIs.
+Qaws supports thirteen curve families. Each is created through a descriptor struct and a `qaws_curve_create_*` function. After creation, all families share the same evaluation, sampling, traversal, and inspection APIs.
 
 ---
 
@@ -246,3 +246,212 @@ qaws_yuksel_desc desc = {
 ### Reference
 
 Cem Yuksel, "A Class of C2 Interpolating Splines", ACM Transactions on Graphics, 2020.
+
+---
+
+## Rational Bezier
+
+**Header:** `qaws_rational_bezier.h`
+
+Weighted Bezier curves that extend standard Bezier curves with per-control-point weights. Evaluation uses the homogeneous (rational) De Casteljau algorithm, enabling exact representation of conic sections such as circles and ellipses within a single span.
+
+- **Degree:** arbitrary (commonly 2 or 3)
+- **Spans:** 1
+- **Continuity:** C0 (single span, no joints)
+- **Rational:** yes
+- **Closed:** no
+- **Dimension:** 2D, 3D
+
+**When to use:** Single-segment rational curves, exact conics, or when per-point weighting is needed without the full machinery of NURBS and custom knot vectors.
+
+```c
+qaws_vec2 pts[] = { {1,0}, {1,1}, {0,1} };
+qaws_scalar weights[] = { 1.0f, 0.70710678118f, 1.0f };
+qaws_rational_bezier_desc desc = {
+    .dimension = QAWS_DIMENSION_2D,
+    .degree = 2,
+    .control_points = pts,
+    .control_point_count = 3,
+    .weights = weights,
+    .weight_count = 3
+};
+qaws_curve* c = NULL;
+qaws_curve_create_rational_bezier(&desc, &c);
+```
+
+---
+
+## Arc
+
+**Header:** `qaws_arc.h`
+
+Circular and elliptical arcs defined by center, radius, and angular range. In 2D, angles are measured counter-clockwise from the +x axis. In 3D, the arc plane is specified with two orthonormal basis vectors (`axis_u`, `axis_v`). Multiple arc segments can be chained in a single descriptor.
+
+- **Degree:** N/A (analytic)
+- **Spans:** segment_count
+- **Continuity:** C-infinity within each segment
+- **Closed:** depends on angle range
+- **Dimension:** 2D, 3D
+
+**When to use:** Circular paths, rounded corners, cam profiles, or any geometry that is naturally described by angular sweeps.
+
+```c
+qaws_arc_segment seg = {
+    .center = {0, 0, 0},
+    .radius = 1.0f,
+    .angle_start = 0.0f,
+    .angle_end = 3.14159265f,   /* half circle */
+    .axis_u = {1, 0, 0},       /* 3D only */
+    .axis_v = {0, 1, 0}        /* 3D only */
+};
+qaws_arc_desc desc = {
+    .dimension = QAWS_DIMENSION_2D,
+    .segments = &seg,
+    .segment_count = 1
+};
+qaws_curve* c = NULL;
+qaws_curve_create_arc(&desc, &c);
+```
+
+---
+
+## Polynomial
+
+**Header:** `qaws_polynomial.h`
+
+Explicit polynomial curves in monomial (power) form: `C(t) = c0 + c1*t + c2*t^2 + ... + cn*t^n`. Each coefficient is a 2D or 3D point. Evaluation uses Horner's method for numerical stability. A custom parameter range `[t_min, t_max]` can be specified.
+
+- **Degree:** arbitrary (>= 1)
+- **Spans:** 1
+- **Continuity:** C-infinity (single polynomial)
+- **Closed:** no
+- **Dimension:** 2D, 3D
+
+**When to use:** When the curve is already expressed as a polynomial in monomial form, analytical test cases, or integration with systems that output polynomial coefficients.
+
+```c
+/* Parabolic arc: C(t) = (0,0) + (1,0)*t + (0,1)*t^2 */
+qaws_vec2 coeffs[] = { {0,0}, {1,0}, {0,1} };
+qaws_polynomial_desc desc = {
+    .dimension = QAWS_DIMENSION_2D,
+    .degree = 2,
+    .coefficients = coeffs,
+    .coefficient_count = 3,
+    .t_min = 0.0f,
+    .t_max = 1.0f
+};
+qaws_curve* c = NULL;
+qaws_curve_create_polynomial(&desc, &c);
+```
+
+---
+
+## Clothoid
+
+**Header:** `qaws_clothoid.h`
+
+Euler spirals (Cornu spirals) whose curvature varies linearly with arc length: `kappa(s) = kappa_0 + (kappa_1 - kappa_0) * s / L`. Position is obtained by integrating the Fresnel-like integrals from the origin. 2D only.
+
+- **Degree:** N/A (transcendental)
+- **Spans:** 1
+- **Continuity:** C-infinity
+- **Closed:** no
+- **Dimension:** 2D only
+
+**Key parameters:**
+
+| Parameter | Meaning |
+|---|---|
+| `origin_x`, `origin_y` | Starting point |
+| `start_angle` | Initial heading in radians |
+| `start_curvature` | Curvature at s = 0 |
+| `end_curvature` | Curvature at s = L |
+| `length` | Total arc length L (must be > 0) |
+
+**When to use:** Road and railway design, transition curves that smoothly connect straight segments to circular arcs, path planning where curvature continuity is required.
+
+```c
+qaws_clothoid_desc desc = {
+    .origin_x = 0.0f,
+    .origin_y = 0.0f,
+    .start_angle = 0.0f,
+    .start_curvature = 0.0f,
+    .end_curvature = 1.0f,
+    .length = 5.0f
+};
+qaws_curve* c = NULL;
+qaws_curve_create_clothoid(&desc, &c);
+```
+
+---
+
+## Subdivision
+
+**Header:** `qaws_subdivision.h`
+
+Limit curves produced by iterative subdivision of an initial control polygon. The subdivision scheme determines the continuity and character of the resulting curve. After a configurable number of refinement levels, the subdivided polyline is used as the curve representation.
+
+- **Degree:** depends on scheme (see below)
+- **Spans:** determined by refinement
+- **Continuity:** depends on scheme
+- **Closed:** yes (optional)
+- **Dimension:** 2D, 3D
+
+**Subdivision schemes:**
+
+| Scheme | Limit Curve | Continuity |
+|---|---|---|
+| `QAWS_SUBDIVISION_CHAIKIN` | Quadratic B-spline | C1 |
+| `QAWS_SUBDIVISION_LANE_RIESENFELD_3` | Cubic B-spline | C2 |
+| `QAWS_SUBDIVISION_LANE_RIESENFELD_4` | Quartic B-spline | C3 |
+
+**When to use:** Quick approximation of smooth curves from coarse polygons, artistic tools, situations where a simple "smooth this polyline" operation is needed.
+
+```c
+qaws_vec2 pts[] = { {0,0}, {1,2}, {3,1}, {4,3}, {5,0} };
+qaws_subdivision_desc desc = {
+    .dimension = QAWS_DIMENSION_2D,
+    .scheme = QAWS_SUBDIVISION_CHAIKIN,
+    .control_points = pts,
+    .control_point_count = 5,
+    .closed = 0,
+    .refinement_levels = 6
+};
+qaws_curve* c = NULL;
+qaws_curve_create_subdivision(&desc, &c);
+```
+
+---
+
+## Composite
+
+**Header:** `qaws_composite.h`
+
+Multi-segment compound curves that chain multiple heterogeneous `qaws_curve` objects end-to-end into a single curve. Each segment occupies one unit in the composite parameter space: segment *i* maps to `[i, i+1]`, giving a total parameter range of `[0, segment_count]`. The composite takes ownership of all segment curve pointers.
+
+- **Degree:** varies per segment
+- **Spans:** segment_count
+- **Continuity:** depends on how segments meet (user's responsibility)
+- **Closed:** depends on segment arrangement
+- **Dimension:** 2D, 3D (all segments must share the same dimension)
+
+**When to use:** Combining curves of different types into a single path (e.g., a line followed by an arc followed by a clothoid), tool paths, complex profiles.
+
+```c
+/* Assume line_curve and arc_curve are already created */
+qaws_curve* segs[] = { line_curve, arc_curve };
+qaws_composite_desc desc = {
+    .dimension = QAWS_DIMENSION_2D,
+    .segments = segs,
+    .segment_count = 2
+};
+qaws_curve* c = NULL;
+qaws_curve_create_composite(&desc, &c);
+/* line_curve and arc_curve are now owned by c; do not destroy them separately */
+```
+
+---
+
+## Surfaces
+
+Surface types (Bezier patches, B-spline surfaces, NURBS surfaces, swept surfaces, and ruled surfaces) are documented in [Surfaces](surfaces.md).

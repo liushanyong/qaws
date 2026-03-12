@@ -60,8 +60,14 @@ Find the curve parameter nearest to a given point:
 
 ```c
 qaws_scalar closest_t;
-qaws_vec2 target = { 1.5f, 0.5f };
-qaws_curve_find_closest_parameter_2d(curve, target, &closest_t);
+
+// 2D
+qaws_vec2 target2 = { 1.5f, 0.5f };
+qaws_curve_find_closest_parameter_2d(curve, target2, &closest_t);
+
+// 3D
+qaws_vec3 target3 = { 1.5f, 0.5f, 0.0f };
+qaws_curve_find_closest_parameter_3d(curve, target3, &closest_t);
 
 // Evaluate at closest_t to get the actual closest point on the curve
 qaws_eval_result_2d result;
@@ -93,6 +99,27 @@ qaws_curve_compute_tangent_2d(curve, t, &tangent);
 // tangent is a unit vector in the direction of travel
 ```
 
+### Normal (2D)
+
+```c
+qaws_vec2 normal;
+qaws_curve_compute_normal_2d(curve, t, &normal);
+// Unit normal perpendicular to the tangent (rotated 90 degrees CCW)
+```
+
+### Frenet frame (3D)
+
+Compute the full Frenet frame at a point on a 3D curve:
+
+```c
+qaws_vec3 tangent, normal, binormal;
+qaws_curve_compute_frenet_frame_3d(curve, t,
+    &tangent, &normal, &binormal);
+// tangent  -- unit tangent vector (direction of travel)
+// normal   -- unit principal normal (points toward center of curvature)
+// binormal -- tangent x normal, completes the right-handed frame
+```
+
 ### Curvature
 
 ```c
@@ -116,6 +143,142 @@ qaws_curve_compute_torsion_3d(curve, t, &tau);
 qaws_scalar speed;
 qaws_curve_compute_speed(curve, t, &speed);
 // |d1| -- magnitude of the first derivative
+```
+
+## Inflection points
+
+Find parameter values where the curvature changes sign (inflection points):
+
+```c
+qaws_scalar inflections[32];
+unsigned int inflection_count;
+qaws_curve_find_inflection_points(curve,
+    inflections, 32, &inflection_count);
+// inflections[0..inflection_count-1] are the parameter values
+```
+
+## Extrema detection
+
+Find parameter values where the curve reaches a minimum or maximum along a given axis:
+
+```c
+qaws_scalar extrema[32];
+unsigned int extrema_count;
+unsigned int axis = 0; // 0 = x, 1 = y, 2 = z
+qaws_curve_find_extrema(curve, axis,
+    extrema, 32, &extrema_count);
+// extrema[0..extrema_count-1] are the parameter values
+```
+
+## Curvature comb
+
+Sample curvature comb data along the curve for visualization. Each sample contains the position on the curve, the signed curvature value, and the normal direction:
+
+```c
+// 2D
+qaws_curvature_sample_2d samples_2d[100];
+qaws_curve_compute_curvature_comb_2d(curve,
+    100,        // number of samples
+    samples_2d, // output buffer
+    100);       // buffer capacity
+
+// Each sample has:
+//   .position  -- point on the curve
+//   .curvature -- signed curvature at that point
+//   .normal    -- unit normal at that point
+
+// 3D
+qaws_curvature_sample_3d samples_3d[100];
+qaws_curve_compute_curvature_comb_3d(curve,
+    100,        // number of samples
+    samples_3d, // output buffer
+    100);       // buffer capacity
+```
+
+The sample structs are defined as:
+
+```c
+typedef struct qaws_curvature_sample_2d {
+    qaws_vec2   position;
+    qaws_scalar curvature;
+    qaws_vec2   normal;
+} qaws_curvature_sample_2d;
+
+typedef struct qaws_curvature_sample_3d {
+    qaws_vec3   position;
+    qaws_scalar curvature;
+    qaws_vec3   normal;
+} qaws_curvature_sample_3d;
+```
+
+## Winding number
+
+Compute the winding number of a closed 2D curve around a point. The winding number counts how many times the curve winds around the point (positive for CCW, negative for CW):
+
+```c
+int winding;
+qaws_vec2 point = { 0.5f, 0.5f };
+qaws_curve_compute_winding_number_2d(curve, point, &winding);
+// winding == 0 means the point is outside the curve
+// winding != 0 means the point is inside
+```
+
+## Curve-curve intersection
+
+Find all intersection points between two curves:
+
+```c
+// 2D
+qaws_intersection_2d hits_2d[32];
+unsigned int hit_count;
+qaws_curve_find_intersections_2d(curve_a, curve_b,
+    hits_2d, 32, &hit_count);
+
+// Each intersection has:
+//   .parameter_a -- parameter on curve_a
+//   .parameter_b -- parameter on curve_b
+//   .position    -- intersection point in space
+
+// 3D
+qaws_intersection_3d hits_3d[32];
+qaws_curve_find_intersections_3d(curve_a, curve_b,
+    hits_3d, 32, &hit_count);
+```
+
+The intersection result structs are defined as:
+
+```c
+typedef struct qaws_intersection_2d {
+    qaws_scalar parameter_a;
+    qaws_scalar parameter_b;
+    qaws_vec2   position;
+} qaws_intersection_2d;
+
+typedef struct qaws_intersection_3d {
+    qaws_scalar parameter_a;
+    qaws_scalar parameter_b;
+    qaws_vec3   position;
+} qaws_intersection_3d;
+```
+
+## Self-intersection detection
+
+Find points where a curve crosses itself:
+
+```c
+// 2D
+qaws_intersection_2d self_hits_2d[32];
+unsigned int self_count;
+qaws_curve_find_self_intersections_2d(curve,
+    self_hits_2d, 32, &self_count);
+
+// parameter_a and parameter_b are the two distinct parameter values
+// where the curve passes through the same position
+
+// 3D
+qaws_intersection_3d self_hits_3d[32];
+qaws_curve_find_self_intersections_3d(curve,
+    self_hits_3d, 32, &self_count);
 ```
 
 ## Family-specific inspection

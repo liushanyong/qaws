@@ -107,3 +107,74 @@ qaws_status qaws_traversal_map_parameter_to_distance(
 ```
 
 Converts a curve parameter to a distance-along-curve value.
+
+---
+
+## qaws_traversal_create_multi
+
+```c
+qaws_status qaws_traversal_create_multi(
+    qaws_curve const* const* curves,
+    unsigned int curve_count,
+    qaws_traversal_desc const* desc,
+    qaws_traversal** out_traversal);
+```
+
+Creates a traversal that spans multiple curves joined end-to-end.
+
+**Parameters:**
+- `curves` -- Array of `curve_count` curve pointers. All must remain alive for the traversal's lifetime.
+- `curve_count` -- Number of curves in the array.
+- `desc` -- Traversal configuration.
+- `out_traversal` -- Receives the created traversal.
+
+**Returns:** `QAWS_STATUS_OK` on success.
+
+**Notes:**
+- The traversal does **not** own the curves.
+- The domain is the concatenation of the individual curve domains.
+
+---
+
+## qaws_traversal_advance_2d
+
+```c
+qaws_status qaws_traversal_advance_2d(
+    qaws_traversal* traversal,
+    qaws_scalar delta_time,
+    unsigned int eval_flags,
+    qaws_eval_result_2d* out_result);
+```
+
+Advances the traversal by a time step and evaluates the curve at the new position. Mutates internal traversal state.
+
+**Parameters:**
+- `traversal` -- The traversal (mutable; not thread-safe with concurrent calls).
+- `delta_time` -- Time increment to advance by.
+- `eval_flags` -- Bitmask of `QAWS_EVAL_FLAG_*`.
+- `out_result` -- Receives position and derivatives at the new time.
+
+---
+
+## qaws_traversal_advance_3d
+
+```c
+qaws_status qaws_traversal_advance_3d(
+    qaws_traversal* traversal,
+    qaws_scalar delta_time,
+    unsigned int eval_flags,
+    qaws_eval_result_3d* out_result);
+```
+
+Same as `advance_2d` but for 3D curves.
+
+---
+
+## qaws_traversal_reset
+
+```c
+qaws_status qaws_traversal_reset(
+    qaws_traversal* traversal);
+```
+
+Resets the traversal to its initial state (time = start_time). Mutates internal state and requires external synchronization if used from multiple threads.
