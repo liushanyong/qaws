@@ -1,6 +1,12 @@
 #ifndef QAWS_H
 #define QAWS_H
 
+#define QAWS_VERSION_MAJOR 1
+#define QAWS_VERSION_MINOR 0
+#define QAWS_VERSION_PATCH 0
+#define QAWS_VERSION ((QAWS_VERSION_MAJOR * 10000) + (QAWS_VERSION_MINOR * 100) + QAWS_VERSION_PATCH)
+#define QAWS_VERSION_STRING "1.0.0"
+
 #include "qaws_types.h"
 #include "qaws_status.h"
 #include "qaws_curve.h"
