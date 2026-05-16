@@ -4,7 +4,7 @@ project(
   Qaws
   VERSION 1.0.0
   DESCRIPTION "Dependency-free C11 curve evaluation and traversal library"
-  LANGUAGES C
+  LANGUAGES C CXX
 )
 
 include(GNUInstallDirs)
@@ -191,6 +191,39 @@ if(BUILD_TESTING)
   )
 endif()
 
+# =============================================================================
+# Optional C++ bindings (acge / acdb / acgi)
+# =============================================================================
+option(QAWS_BUILD_CXX_BINDINGS
+  "Build the C++ AcGe/AcDb/AcGi wrapper library (qaws_cxx)" OFF)
+
+if(QAWS_BUILD_CXX_BINDINGS)
+  add_library(qaws_cxx
+    src/qaws/acdb/acdb_arc.cpp
+    src/qaws/acdb/acdb_spline.cpp
+  )
+  add_library(Qaws::qaws_cxx ALIAS qaws_cxx)
+
+  set_target_properties(qaws_cxx PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+    POSITION_INDEPENDENT_CODE ON
+  )
+
+  target_include_directories(qaws_cxx
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/qaws>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  )
+
+  target_link_libraries(qaws_cxx PUBLIC qaws)
+
+  if(MSVC)
+    target_compile_definitions(qaws_cxx PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+  endif()
+endif()
+
 if(QAWS_INSTALL)
   install(
     TARGETS qaws
@@ -259,6 +292,45 @@ if(QAWS_INSTALL)
       src/qaws/core/qaws_surface_core.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/core
   )
+
+  # ---- C++ AcGe geometry wrappers ----
+  install(
+    FILES
+      src/qaws/acge/acge_types.h
+      src/qaws/acge/acge_circarc2d.h
+      src/qaws/acge/acge_circarc3d.h
+      src/qaws/acge/acge.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/acge
+  )
+
+  # ---- C++ AcDb CAD entity wrappers ----
+  install(
+    FILES
+      src/qaws/acdb/acdb_types.h
+      src/qaws/acdb/acdb_curve.h
+      src/qaws/acdb/acdb_arc.h
+      src/qaws/acdb/acdb_spline.h
+      src/qaws/acdb/acdb.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/acdb
+  )
+
+  # ---- C++ AcGi abstract rendering interface ----
+  install(
+    FILES
+      src/qaws/acgi/acgi_geometry.h
+      src/qaws/acgi/acgi.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/acgi
+  )
+
+  if(QAWS_BUILD_CXX_BINDINGS)
+    install(
+      TARGETS qaws_cxx
+      EXPORT QawsTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+  endif()
 
   set(QAWS_CMAKE_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/Qaws")
 
